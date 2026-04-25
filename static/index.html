@@ -8,52 +8,90 @@
   </head>
   <body>
     <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div>
+            <p class="eyebrow">本地生成工作台</p>
+            <h1>Codex Canvas</h1>
+          </div>
+        </div>
+        <div class="topbar-meta">
+          <div class="nav-chip">创作</div>
+          <div class="command-chip">本地执行</div>
+          <div class="status-pill" id="statusPill">就绪</div>
+        </div>
+      </header>
+
       <section class="workspace">
-        <div class="prompt-panel">
-          <div class="panel-head">
+        <section class="prompt-panel" aria-labelledby="composeTitle">
+          <div class="section-head">
             <div>
-              <h1>Codex Canvas Local</h1>
-              <p>输入提示词，后端会执行 <code>codex exec --skip-git-repo-check "use skill $imagegen : ..."</code></p>
+              <p class="section-kicker">创作</p>
+              <h2 id="composeTitle">生成设置</h2>
             </div>
-            <div class="status-pill" id="statusPill">Ready</div>
+            <span id="promptMeta">0 字</span>
           </div>
 
           <form id="promptForm" class="prompt-form">
             <label for="prompt">提示词</label>
-            <textarea id="prompt" name="prompt" spellcheck="false" placeholder="例如：一张赛博朋克风格的城市夜景，16:9，电影感灯光，不要文字"></textarea>
-            <label for="referenceImages">参考图片</label>
+            <textarea id="prompt" name="prompt" spellcheck="false" placeholder="雨后傍晚的小学门口小卖部，真实纪实摄影，地面微湿有反光，不要文字水印"></textarea>
+
+            <label for="referenceImages">参考图</label>
             <div class="upload-box">
-              <input id="referenceImages" name="images" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+              <div class="upload-control">
+                <label class="upload-button" for="referenceImages">选择图片</label>
+                <input id="referenceImages" class="sr-only" name="images" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+                <span id="fileInputSummary">未选择文件</span>
+                <span id="referenceMeta">0 张参考图</span>
+              </div>
               <div id="referenceList" class="reference-list">未选择图片。</div>
             </div>
+
             <div class="form-actions">
-              <button type="submit" id="runButton">开始作图</button>
-              <button type="button" id="clearButton" class="secondary">清空</button>
+              <button type="submit" id="runButton">生成图片</button>
             </div>
           </form>
-        </div>
+        </section>
 
-        <div class="result-panel">
-          <div class="result-head">
-            <h2>图片预览</h2>
+        <section class="result-panel" aria-labelledby="resultTitle">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">输出</p>
+              <h2 id="resultTitle">生成结果</h2>
+            </div>
             <span id="imageCount">0 张</span>
           </div>
           <div id="gallery" class="gallery empty">
-            <div class="empty-state">生成完成后，图片会显示在这里。</div>
+            <div class="empty-state">
+              <div class="empty-glyph" aria-hidden="true"></div>
+              <p>生成完成后，图片会显示在这里。</p>
+            </div>
           </div>
-        </div>
+        </section>
       </section>
 
-      <aside class="activity">
-        <div class="activity-head">
-          <h2>运行日志</h2>
-          <button type="button" id="refreshButton" class="icon-button" title="刷新">↻</button>
-        </div>
-        <pre id="logOutput">等待任务。</pre>
-        <div class="history-head">
-          <h2>任务</h2>
-        </div>
-        <div id="jobs" class="jobs"></div>
+      <aside class="side-rail">
+        <details class="activity" id="logDetails" open>
+          <summary class="activity-summary">
+            <span>运行日志</span>
+            <span id="logSummary">等待任务</span>
+          </summary>
+          <div class="log-actions">
+            <button type="button" id="refreshButton" class="icon-button" title="刷新日志" aria-label="刷新日志">↻</button>
+          </div>
+          <pre id="logOutput">等待任务。</pre>
+        </details>
+
+        <section class="history-panel" aria-labelledby="historyTitle">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">历史</p>
+              <h2 id="historyTitle">任务记录</h2>
+            </div>
+          </div>
+          <div id="jobs" class="jobs"></div>
+        </section>
       </aside>
     </main>
 

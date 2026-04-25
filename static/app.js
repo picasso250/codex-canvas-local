@@ -2,10 +2,14 @@ const form = document.querySelector("#promptForm");
 const promptInput = document.querySelector("#prompt");
 const imageInput = document.querySelector("#referenceImages");
 const referenceList = document.querySelector("#referenceList");
+const referenceMeta = document.querySelector("#referenceMeta");
+const fileInputSummary = document.querySelector("#fileInputSummary");
+const promptMeta = document.querySelector("#promptMeta");
 const runButton = document.querySelector("#runButton");
-const clearButton = document.querySelector("#clearButton");
 const refreshButton = document.querySelector("#refreshButton");
 const statusPill = document.querySelector("#statusPill");
+const logDetails = document.querySelector("#logDetails");
+const logSummary = document.querySelector("#logSummary");
 const logOutput = document.querySelector("#logOutput");
 const gallery = document.querySelector("#gallery");
 const imageCount = document.querySelector("#imageCount");
@@ -13,19 +17,21 @@ const jobsEl = document.querySelector("#jobs");
 
 let activeJobId = null;
 let pollTimer = null;
+const autoCollapsedJobs = new Set();
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const prompt = promptInput.value.trim();
   if (!prompt) {
-    setStatus("Need prompt", "warn");
+    setStatus("需要提示词", "warn");
     promptInput.focus();
     return;
   }
 
   runButton.disabled = true;
-  setStatus("Queued", "busy");
-  logOutput.textContent = "提交任务...\n";
+  setStatus("排队中", "busy");
+  setLog("提交任务...\n", "提交任务");
+  logDetails.open = true;
   clearGallery();
 
   try {
@@ -46,18 +52,12 @@ form.addEventListener("submit", async (event) => {
     await loadJobs();
   } catch (error) {
     runButton.disabled = false;
-    setStatus("Failed", "error");
-    logOutput.textContent += `提交失败：${error.message}\n`;
+    setStatus("失败", "error");
+    setLog(`${logOutput.textContent}提交失败：${error.message}\n`, "提交失败");
   }
 });
 
-clearButton.addEventListener("click", () => {
-  promptInput.value = "";
-  imageInput.value = "";
-  renderReferenceList();
-  promptInput.focus();
-});
-
+promptInput.addEventListener("input", renderPromptMeta);
 imageInput.addEventListener("change", renderReferenceList);
 
 refreshButton.addEventListener("click", async () => {
@@ -95,7 +95,7 @@ async function loadJobs() {
     button.className = `job-item ${job.id === activeJobId ? "active" : ""}`;
     button.type = "button";
     button.innerHTML = `
-      <span class="job-status ${job.status}">${job.status}</span>
+      <span class="job-status ${job.status}">${jobStatusText(job.status)}</span>
       <span class="job-prompt">${escapeHTML(job.prompt)}</span>
       <span class="job-time">${new Date(job.createdAt).toLocaleString()}${referenceSuffix(job)}</span>
     `;
@@ -110,14 +110,13 @@ async function loadJobs() {
 }
 
 function renderJob(job) {
-  logOutput.textContent = job.log || "等待日志。";
-  logOutput.scrollTop = logOutput.scrollHeight;
+  if (job.status === "queued") setStatus("排队中", "busy");
+  if (job.status === "running") setStatus("运行中", "busy");
+  if (job.status === "succeeded") setStatus("完成", "ok");
+  if (job.status === "failed") setStatus("失败", "error");
 
-  if (job.status === "queued") setStatus("Queued", "busy");
-  if (job.status === "running") setStatus("Running", "busy");
-  if (job.status === "succeeded") setStatus("Done", "ok");
-  if (job.status === "failed") setStatus("Failed", "error");
-
+  setLog(job.log || "等待日志。", logLabel(job));
+  maybeCollapseLog(job);
   renderImages(job.images || []);
 }
 
@@ -157,8 +156,39 @@ function setStatus(text, tone) {
   statusPill.className = `status-pill ${tone || ""}`;
 }
 
+function setLog(text, summary) {
+  logOutput.textContent = text;
+  logOutput.scrollTop = logOutput.scrollHeight;
+  logSummary.textContent = summary;
+}
+
+function logLabel(job) {
+  if (job.status === "queued") return "排队中";
+  if (job.status === "running") return lastLogLine(job.log) || "运行中";
+  if (job.status === "succeeded") return `完成 · ${(job.images || []).length} 张图片`;
+  if (job.status === "failed") return "失败";
+  return "等待任务";
+}
+
+function lastLogLine(log) {
+  return String(log || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .at(-1);
+}
+
+function maybeCollapseLog(job) {
+  const done = job.status === "succeeded" || job.status === "failed";
+  if (!done || autoCollapsedJobs.has(job.id)) return;
+  logDetails.open = false;
+  autoCollapsedJobs.add(job.id);
+}
+
 function renderReferenceList() {
   const files = [...imageInput.files];
+  referenceMeta.textContent = `${files.length} 张参考图`;
+  fileInputSummary.textContent = files.length ? `${files.length} 个文件` : "未选择文件";
   if (!files.length) {
     referenceList.textContent = "未选择图片。";
     referenceList.classList.remove("has-files");
@@ -167,13 +197,25 @@ function renderReferenceList() {
 
   referenceList.classList.add("has-files");
   referenceList.innerHTML = files
-    .map((file) => `<span>${escapeHTML(file.name)}</span>`)
+    .map((file, index) => `<span>${index + 1}. ${escapeHTML(file.name)}</span>`)
     .join("");
+}
+
+function renderPromptMeta() {
+  promptMeta.textContent = `${promptInput.value.trim().length} 字`;
 }
 
 function referenceSuffix(job) {
   const count = (job.referenceImages || []).length;
   return count ? ` · ${count} 张参考图` : "";
+}
+
+function jobStatusText(status) {
+  if (status === "queued") return "排队";
+  if (status === "running") return "运行";
+  if (status === "succeeded") return "完成";
+  if (status === "failed") return "失败";
+  return status;
 }
 
 function escapeHTML(value) {
@@ -187,3 +229,4 @@ function escapeHTML(value) {
 
 loadJobs();
 renderReferenceList();
+renderPromptMeta();
