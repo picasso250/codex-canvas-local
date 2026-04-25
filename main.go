@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -27,7 +28,7 @@ import (
 var staticFiles embed.FS
 
 const (
-	addr          = "127.0.0.1:8080"
+	defaultAddr   = "127.0.0.1:8765"
 	runTimeout    = 20 * time.Minute
 	maxPrompt     = 12000
 	maxUploadBody = 128 << 20
@@ -91,6 +92,8 @@ type createJobResponse struct {
 }
 
 func main() {
+	cfg := parseConfig()
+
 	root, err := os.Getwd()
 	if err != nil {
 		log.Fatal(err)
@@ -119,8 +122,23 @@ func main() {
 	mux.HandleFunc("/api/jobs", app.handleJobs)
 	mux.HandleFunc("/api/jobs/", app.handleJob)
 
-	log.Printf("codex canvas local listening on http://%s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Printf("codex canvas local listening on http://%s", cfg.addr)
+	log.Fatal(http.ListenAndServe(cfg.addr, mux))
+}
+
+type config struct {
+	addr string
+}
+
+func parseConfig() config {
+	addr := flag.String("addr", defaultAddr, "listen address, for example 127.0.0.1:8765")
+	port := flag.String("port", "", "listen port on 127.0.0.1; overrides --addr when set")
+	flag.Parse()
+
+	if strings.TrimSpace(*port) != "" {
+		return config{addr: "127.0.0.1:" + strings.TrimSpace(*port)}
+	}
+	return config{addr: strings.TrimSpace(*addr)}
 }
 
 func (s *server) handleJobs(w http.ResponseWriter, r *http.Request) {
