@@ -1,0 +1,15 @@
+# Build outputs
+/bin/
+*.exe
+
+# Runtime/session data
+/tmp/
+/runs/
+
+# Local smoke-test artifacts
+/smoke-*.png
+/tmp-*.png
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

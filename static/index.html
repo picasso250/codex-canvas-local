@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Canvas Local</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <div class="prompt-panel">
+          <div class="panel-head">
+            <div>
+              <h1>Codex Canvas Local</h1>
+              <p>输入提示词，后端会执行 <code>codex exec --skip-git-repo-check "use skill $imagegen : ..."</code></p>
+            </div>
+            <div class="status-pill" id="statusPill">Ready</div>
+          </div>
+
+          <form id="promptForm" class="prompt-form">
+            <label for="prompt">提示词</label>
+            <textarea id="prompt" name="prompt" spellcheck="false" placeholder="例如：一张赛博朋克风格的城市夜景，16:9，电影感灯光，不要文字"></textarea>
+            <label for="referenceImages">参考图片</label>
+            <div class="upload-box">
+              <input id="referenceImages" name="images" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+              <div id="referenceList" class="reference-list">未选择图片。</div>
+            </div>
+            <div class="form-actions">
+              <button type="submit" id="runButton">开始作图</button>
+              <button type="button" id="clearButton" class="secondary">清空</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="result-panel">
+          <div class="result-head">
+            <h2>图片预览</h2>
+            <span id="imageCount">0 张</span>
+          </div>
+          <div id="gallery" class="gallery empty">
+            <div class="empty-state">生成完成后，图片会显示在这里。</div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="activity">
+        <div class="activity-head">
+          <h2>运行日志</h2>
+          <button type="button" id="refreshButton" class="icon-button" title="刷新">↻</button>
+        </div>
+        <pre id="logOutput">等待任务。</pre>
+        <div class="history-head">
+          <h2>任务</h2>
+        </div>
+        <div id="jobs" class="jobs"></div>
+      </aside>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
