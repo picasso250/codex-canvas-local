@@ -5,6 +5,7 @@
 # Runtime/session data
 /tmp/
 /runs/
+/.wrangler/
 
 # Local smoke-test artifacts
 /smoke-*.png
