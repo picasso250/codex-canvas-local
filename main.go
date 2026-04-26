@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -115,9 +116,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	staticVersion := mustStaticVersion()
 
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.FS(staticRoot)))
+	mux.Handle("/", staticHandler(staticRoot, staticVersion))
 	mux.Handle("/runs/", http.StripPrefix("/runs/", http.FileServer(http.Dir(filepath.Join(root, "runs")))))
 	mux.HandleFunc("/api/jobs", app.handleJobs)
 	mux.HandleFunc("/api/jobs/", app.handleJob)
@@ -139,6 +141,40 @@ func parseConfig() config {
 		return config{addr: "127.0.0.1:" + strings.TrimSpace(*port)}
 	}
 	return config{addr: strings.TrimSpace(*addr)}
+}
+
+func mustStaticVersion() string {
+	h := sha256.New()
+	for _, name := range []string{"static/index.html", "static/app.js", "static/styles.css"} {
+		b, err := staticFiles.ReadFile(name)
+		if err != nil {
+			log.Fatal(err)
+		}
+		h.Write(b)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}
+
+func staticHandler(root fs.FS, version string) http.Handler {
+	files := http.FileServer(http.FS(root))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			b, err := fs.ReadFile(root, "index.html")
+			if err != nil {
+				http.Error(w, "index not found", http.StatusInternalServerError)
+				return
+			}
+			html := strings.ReplaceAll(string(b), `href="/styles.css"`, `href="/styles.css?v=`+version+`"`)
+			html = strings.ReplaceAll(html, `src="/app.js"`, `src="/app.js?v=`+version+`"`)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = io.WriteString(w, html)
+			return
+		}
+
+		files.ServeHTTP(w, r)
+	})
 }
 
 func (s *server) handleJobs(w http.ResponseWriter, r *http.Request) {
