@@ -448,7 +448,7 @@ func (s *server) saveReferenceImages(r *http.Request, uploadsDir string) ([]refe
 }
 
 func buildCodexArgs() []string {
-	return []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--color", "never"}
+	return []string{"exec", "--disable", "memories", "--skip-git-repo-check", "--sandbox", "workspace-write", "--color", "never"}
 }
 
 func buildCodexPrompt(j *job) string {
