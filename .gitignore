@@ -3,6 +3,7 @@
 *.exe
 
 # Runtime/session data
+/data/
 /tmp/
 /runs/
 /.wrangler/

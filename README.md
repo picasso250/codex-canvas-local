@@ -26,6 +26,25 @@ or with a full listen address:
 .\bin\codex-canvas-local.exe --addr 127.0.0.1:9000
 ```
 
+## Audit Log
+
+Accepted generation requests are appended to:
+
+```text
+data/audit.jsonl
+```
+
+Each line is one JSON event with the job ID, timestamp, Cloudflare Access email
+when present, client IP, user agent, original prompt, Codex args, Codex stdin,
+session workdir, and reference image paths. The service rejects a new job if the
+audit event cannot be written.
+
+Quick inspection:
+
+```powershell
+Get-Content .\data\audit.jsonl | ConvertFrom-Json | Select-Object createdAt,email,ip,jobId,prompt
+```
+
 ## Public Access
 
 Current public hostname:

@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -40,10 +41,12 @@ var imageExts = map[string]bool{
 }
 
 type server struct {
-	root string
-	jobs map[string]*job
-	mu   sync.RWMutex
-	sem  chan struct{}
+	root      string
+	auditPath string
+	jobs      map[string]*job
+	mu        sync.RWMutex
+	auditMu   sync.Mutex
+	sem       chan struct{}
 }
 
 type job struct {
@@ -92,6 +95,22 @@ type createJobResponse struct {
 	ID string `json:"id"`
 }
 
+type auditEvent struct {
+	Event           string          `json:"event"`
+	JobID           string          `json:"jobId"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	Email           string          `json:"email,omitempty"`
+	IP              string          `json:"ip,omitempty"`
+	RemoteAddr      string          `json:"remoteAddr,omitempty"`
+	UserAgent       string          `json:"userAgent,omitempty"`
+	CFRay           string          `json:"cfRay,omitempty"`
+	Prompt          string          `json:"prompt"`
+	CodexArgs       []string        `json:"codexArgs"`
+	CodexPrompt     string          `json:"codexPrompt"`
+	WorkDir         string          `json:"workDir"`
+	ReferenceImages []referenceInfo `json:"referenceImages,omitempty"`
+}
+
 func main() {
 	cfg := parseConfig()
 
@@ -105,11 +124,15 @@ func main() {
 	if err := os.MkdirAll(filepath.Join(root, "tmp", "sessions"), 0755); err != nil {
 		log.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "data"), 0700); err != nil {
+		log.Fatal(err)
+	}
 
 	app := &server{
-		root: root,
-		jobs: make(map[string]*job),
-		sem:  make(chan struct{}, 1),
+		root:      root,
+		auditPath: filepath.Join(root, "data", "audit.jsonl"),
+		jobs:      make(map[string]*job),
+		sem:       make(chan struct{}, 1),
 	}
 
 	staticRoot, err := fs.Sub(staticFiles, "static")
@@ -231,6 +254,11 @@ func (s *server) createJob(w http.ResponseWriter, r *http.Request) {
 		Status:          "queued",
 		CreatedAt:       time.Now(),
 		ReferenceImages: refs,
+	}
+
+	if err := s.writeAuditEvent(newAuditEvent(r, j)); err != nil {
+		http.Error(w, "could not write audit log", http.StatusInternalServerError)
+		return
 	}
 
 	s.mu.Lock()
@@ -600,6 +628,72 @@ func (s *server) appendLog(j *job, format string, args ...any) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.Log += fmt.Sprintf(format, args...)
+}
+
+func newAuditEvent(r *http.Request, j *job) auditEvent {
+	email := firstHeader(r,
+		"Cf-Access-Authenticated-User-Email",
+		"CF-Access-Authenticated-User-Email",
+		"X-Forwarded-Email",
+	)
+
+	return auditEvent{
+		Event:           "job_created",
+		JobID:           j.ID,
+		CreatedAt:       j.CreatedAt,
+		Email:           email,
+		IP:              clientIP(r),
+		RemoteAddr:      r.RemoteAddr,
+		UserAgent:       strings.TrimSpace(r.UserAgent()),
+		CFRay:           strings.TrimSpace(r.Header.Get("Cf-Ray")),
+		Prompt:          j.Prompt,
+		CodexArgs:       buildCodexArgs(),
+		CodexPrompt:     buildCodexPrompt(j),
+		WorkDir:         j.WorkDir,
+		ReferenceImages: append([]referenceInfo(nil), j.ReferenceImages...),
+	}
+}
+
+func (s *server) writeAuditEvent(event auditEvent) error {
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+
+	if err := os.MkdirAll(filepath.Dir(s.auditPath), 0700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(s.auditPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	enc := json.NewEncoder(f)
+	return enc.Encode(event)
+}
+
+func firstHeader(r *http.Request, names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(r.Header.Get(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func clientIP(r *http.Request) string {
+	if value := firstHeader(r, "Cf-Connecting-Ip", "True-Client-Ip", "X-Real-Ip"); value != "" {
+		return value
+	}
+	if forwardedFor := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwardedFor != "" {
+		parts := strings.Split(forwardedFor, ",")
+		if ip := strings.TrimSpace(parts[0]); ip != "" {
+			return ip
+		}
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
