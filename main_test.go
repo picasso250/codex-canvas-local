@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -89,6 +92,7 @@ func TestUserWorkDirKey(t *testing.T) {
 }
 
 func TestCollectImagesDeduplicatesByHash(t *testing.T) {
+	isolateImageSearchEnv(t)
 	root := t.TempDir()
 	s := &server{root: root}
 	workDir := filepath.Join(root, "tmp", "users", "user")
@@ -118,6 +122,7 @@ func TestCollectImagesDeduplicatesByHash(t *testing.T) {
 }
 
 func TestCollectImagesIncludesUpdatedPersistentFile(t *testing.T) {
+	isolateImageSearchEnv(t)
 	root := t.TempDir()
 	s := &server{root: root}
 	workDir := filepath.Join(root, "tmp", "users", "user")
@@ -138,6 +143,124 @@ func TestCollectImagesIncludesUpdatedPersistentFile(t *testing.T) {
 	}
 }
 
+func TestListJobsFiltersByUser(t *testing.T) {
+	s := &server{jobs: map[string]*job{}}
+	userReq := httptest.NewRequest("GET", "/api/jobs", nil)
+	userReq.Header.Set("Cf-Access-Authenticated-User-Email", "user@example.com")
+	otherReq := httptest.NewRequest("GET", "/api/jobs", nil)
+	otherReq.Header.Set("Cf-Access-Authenticated-User-Email", "other@example.com")
+
+	s.jobs["user-job"] = &job{ID: "user-job", Mode: "work", UserKey: s.userKey(userReq), Prompt: "mine", Status: "succeeded", CreatedAt: time.Now()}
+	s.jobs["other-job"] = &job{ID: "other-job", Mode: "work", UserKey: s.userKey(otherReq), Prompt: "theirs", Status: "succeeded", CreatedAt: time.Now()}
+
+	rr := httptest.NewRecorder()
+	s.listJobs(rr, userReq)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	var got []jobView
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "user-job" {
+		t.Fatalf("jobs = %#v", got)
+	}
+}
+
+func TestBuildCodexPromptWorkModePassesThrough(t *testing.T) {
+	j := &job{Mode: "work", Prompt: "inspect files"}
+	if got := buildCodexPrompt(j); got != "inspect files" {
+		t.Fatalf("prompt = %q", got)
+	}
+}
+
+func TestSafeUserPathRejectsTraversalAndRootDelete(t *testing.T) {
+	root := t.TempDir()
+	if _, _, err := safeUserPath(root, `..\other`); err == nil {
+		t.Fatal("expected traversal error")
+	}
+	if _, _, err := safeUserPath(root, filepath.Join(root, "file.txt")); err == nil {
+		t.Fatal("expected absolute path error")
+	}
+
+	s := &server{root: t.TempDir()}
+	req := httptest.NewRequest("DELETE", "/api/work/files?path=.", nil)
+	rr := httptest.NewRecorder()
+	s.deleteWorkFile(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", rr.Code)
+	}
+}
+
+func TestWorkFileUploadAndList(t *testing.T) {
+	root := t.TempDir()
+	s := &server{root: root}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("files", "note.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/work/files/upload?path=.", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rr := httptest.NewRecorder()
+	s.handleWorkFileUpload(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	listReq := httptest.NewRequest("GET", "/api/work/files?path=.", nil)
+	listRR := httptest.NewRecorder()
+	s.listWorkFiles(listRR, listReq)
+	if listRR.Code != http.StatusOK {
+		t.Fatalf("list status = %d", listRR.Code)
+	}
+	var got struct {
+		Entries []fileEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(listRR.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Entries) != 1 || got.Entries[0].Name != "note.txt" {
+		t.Fatalf("entries = %#v", got.Entries)
+	}
+}
+
+func TestStaticHandlerServesWorkForCodexHostRoot(t *testing.T) {
+	root := os.DirFS("static")
+	handler := staticHandler(root, "test")
+	req := httptest.NewRequest("GET", "http://codex.io99.xyz/", nil)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "Codex Work") {
+		t.Fatalf("expected work page, got %q", rr.Body.String())
+	}
+}
+
+func TestIsWorkHost(t *testing.T) {
+	if !isWorkHost("codex.io99.xyz") {
+		t.Fatal("expected codex.io99.xyz to be work host")
+	}
+	if !isWorkHost("codex.io99.xyz:443") {
+		t.Fatal("expected codex.io99.xyz:443 to be work host")
+	}
+	if isWorkHost("pic.io99.xyz") {
+		t.Fatal("pic host should not be work host")
+	}
+}
+
 func mustReadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -152,4 +275,12 @@ func writeTestFile(t *testing.T, path string, content []byte) {
 	if err := os.WriteFile(path, content, 0644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func isolateImageSearchEnv(t *testing.T) {
+	t.Helper()
+	emptyHome := t.TempDir()
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("USERPROFILE", emptyHome)
+	t.Setenv("HOME", emptyHome)
 }

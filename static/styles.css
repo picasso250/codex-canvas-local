@@ -50,6 +50,15 @@ input {
   font: inherit;
 }
 
+input[type="text"] {
+  min-height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--ink);
+  background: var(--surface-muted);
+}
+
 button {
   min-height: 46px;
   border: 1px solid rgba(116, 150, 255, 0.46);
@@ -192,6 +201,10 @@ button.secondary:hover,
   color: var(--ink);
   border-color: rgba(201, 164, 93, 0.35);
   background: var(--gold-soft);
+}
+
+a.nav-chip {
+  text-decoration: none;
 }
 
 .eyebrow,
@@ -450,6 +463,116 @@ textarea:focus {
 
 .gallery.empty {
   display: block;
+}
+
+.path-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.file-panel {
+  align-content: start;
+}
+
+.file-list {
+  display: grid;
+  gap: 8px;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.file-preview {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #090c10;
+}
+
+.file-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.file-icon {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.file-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.file-main span,
+.file-link {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-main > span:last-child {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-link {
+  min-height: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+}
+
+.file-link:hover {
+  background: transparent;
+  color: #c9d6ff;
+}
+
+.file-actions {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.file-actions button {
+  min-height: 36px;
+}
+
+.file-action {
+  display: inline-grid;
+  min-height: 36px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--ink);
+  background: #151a20;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.compact-empty {
+  min-height: 150px;
 }
 
 .empty-state {

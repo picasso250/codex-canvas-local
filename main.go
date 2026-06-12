@@ -16,6 +16,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +52,8 @@ type server struct {
 
 type job struct {
 	ID              string          `json:"id"`
+	Mode            string          `json:"mode"`
+	UserKey         string          `json:"-"`
 	Prompt          string          `json:"prompt"`
 	WorkDir         string          `json:"workDir"`
 	Status          string          `json:"status"`
@@ -67,6 +70,7 @@ type job struct {
 
 type jobView struct {
 	ID              string          `json:"id"`
+	Mode            string          `json:"mode"`
 	Prompt          string          `json:"prompt"`
 	WorkDir         string          `json:"workDir"`
 	Status          string          `json:"status"`
@@ -93,6 +97,17 @@ type referenceInfo struct {
 
 type createJobResponse struct {
 	ID string `json:"id"`
+}
+
+type fileEntry struct {
+	Name        string    `json:"name"`
+	Path        string    `json:"path"`
+	IsDir       bool      `json:"isDir"`
+	Size        int64     `json:"size"`
+	ModTime     time.Time `json:"modTime"`
+	IsImage     bool      `json:"isImage"`
+	PreviewURL  string    `json:"previewUrl,omitempty"`
+	DownloadURL string    `json:"downloadUrl,omitempty"`
 }
 
 type auditEvent struct {
@@ -146,6 +161,12 @@ func main() {
 	mux.Handle("/runs/", http.StripPrefix("/runs/", http.FileServer(http.Dir(filepath.Join(root, "runs")))))
 	mux.HandleFunc("/api/jobs", app.handleJobs)
 	mux.HandleFunc("/api/jobs/", app.handleJob)
+	mux.HandleFunc("/api/work/jobs", app.handleWorkJobs)
+	mux.HandleFunc("/api/work/jobs/", app.handleWorkJob)
+	mux.HandleFunc("/api/work/files", app.handleWorkFiles)
+	mux.HandleFunc("/api/work/files/upload", app.handleWorkFileUpload)
+	mux.HandleFunc("/api/work/files/download", app.handleWorkFileDownload)
+	mux.HandleFunc("/api/work/files/preview", app.handleWorkFilePreview)
 
 	log.Printf("codex canvas local listening on http://%s", cfg.addr)
 	log.Fatal(http.ListenAndServe(cfg.addr, mux))
@@ -168,7 +189,7 @@ func parseConfig() config {
 
 func mustStaticVersion() string {
 	h := sha256.New()
-	for _, name := range []string{"static/index.html", "static/app.js", "static/styles.css"} {
+	for _, name := range []string{"static/index.html", "static/work.html", "static/app.js", "static/work.js", "static/styles.css"} {
 		b, err := staticFiles.ReadFile(name)
 		if err != nil {
 			log.Fatal(err)
@@ -183,14 +204,19 @@ func staticHandler(root fs.FS, version string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 
-		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
-			b, err := fs.ReadFile(root, "index.html")
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" || r.URL.Path == "/work" || r.URL.Path == "/work/" {
+			name := "index.html"
+			if r.URL.Path == "/work" || r.URL.Path == "/work/" || isWorkHost(r.Host) {
+				name = "work.html"
+			}
+			b, err := fs.ReadFile(root, name)
 			if err != nil {
 				http.Error(w, "index not found", http.StatusInternalServerError)
 				return
 			}
 			html := strings.ReplaceAll(string(b), `href="/styles.css"`, `href="/styles.css?v=`+version+`"`)
 			html = strings.ReplaceAll(html, `src="/app.js"`, `src="/app.js?v=`+version+`"`)
+			html = strings.ReplaceAll(html, `src="/work.js"`, `src="/work.js?v=`+version+`"`)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = io.WriteString(w, html)
 			return
@@ -198,6 +224,17 @@ func staticHandler(root fs.FS, version string) http.Handler {
 
 		files.ServeHTTP(w, r)
 	})
+}
+
+func isWorkHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return false
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return host == "codex.io99.xyz"
 }
 
 func (s *server) handleJobs(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +286,8 @@ func (s *server) createJob(w http.ResponseWriter, r *http.Request) {
 
 	j := &job{
 		ID:              id,
+		Mode:            "pic",
+		UserKey:         s.userKey(r),
 		Prompt:          prompt,
 		WorkDir:         workDir,
 		Status:          "queued",
@@ -270,9 +309,13 @@ func (s *server) createJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listJobs(w http.ResponseWriter, r *http.Request) {
+	userKey := s.userKey(r)
 	s.mu.RLock()
 	jobs := make([]jobView, 0, len(s.jobs))
 	for _, j := range s.jobs {
+		if j.UserKey != userKey {
+			continue
+		}
 		jobs = append(jobs, j.snapshot())
 	}
 	s.mu.RUnlock()
@@ -298,12 +341,107 @@ func (s *server) handleJob(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	j := s.jobs[id]
 	s.mu.RUnlock()
-	if j == nil {
+	if j == nil || j.UserKey != s.userKey(r) {
 		http.NotFound(w, r)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, j.snapshot())
+}
+
+func (s *server) handleWorkJobs(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		s.createWorkJob(w, r)
+	case http.MethodGet:
+		s.listJobs(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) handleWorkJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/work/jobs/")
+	if id == "" || strings.Contains(id, "/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	s.mu.RLock()
+	j := s.jobs[id]
+	s.mu.RUnlock()
+	if j == nil || j.UserKey != s.userKey(r) {
+		http.NotFound(w, r)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, j.snapshot())
+}
+
+func (s *server) createWorkJob(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBody)
+	contentType := r.Header.Get("Content-Type")
+	var prompt string
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			http.Error(w, "invalid multipart form", http.StatusBadRequest)
+			return
+		}
+		prompt = strings.TrimSpace(r.FormValue("prompt"))
+	} else {
+		var body struct {
+			Prompt string `json:"prompt"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		prompt = strings.TrimSpace(body.Prompt)
+	}
+	if prompt == "" {
+		http.Error(w, "prompt is required", http.StatusBadRequest)
+		return
+	}
+	if len(prompt) > maxPrompt {
+		http.Error(w, fmt.Sprintf("prompt is too long; max %d bytes", maxPrompt), http.StatusBadRequest)
+		return
+	}
+
+	id, err := newID()
+	if err != nil {
+		http.Error(w, "could not create job id", http.StatusInternalServerError)
+		return
+	}
+
+	j := &job{
+		ID:        id,
+		Mode:      "work",
+		UserKey:   s.userKey(r),
+		Prompt:    prompt,
+		WorkDir:   s.userWorkDir(r),
+		Status:    "queued",
+		CreatedAt: time.Now(),
+	}
+	if err := os.MkdirAll(j.WorkDir, 0755); err != nil {
+		http.Error(w, "could not create user directory", http.StatusInternalServerError)
+		return
+	}
+	if err := s.writeAuditEvent(newAuditEvent(r, j)); err != nil {
+		http.Error(w, "could not write audit log", http.StatusInternalServerError)
+		return
+	}
+
+	s.mu.Lock()
+	s.jobs[id] = j
+	s.mu.Unlock()
+
+	go s.runJob(j)
+	writeJSON(w, http.StatusAccepted, createJobResponse{ID: id})
 }
 
 func (s *server) runJob(j *job) {
@@ -447,6 +585,194 @@ func (s *server) saveReferenceImages(r *http.Request, uploadsDir string) ([]refe
 	return refs, nil
 }
 
+func (s *server) handleWorkFiles(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.listWorkFiles(w, r)
+	case http.MethodDelete:
+		s.deleteWorkFile(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) listWorkFiles(w http.ResponseWriter, r *http.Request) {
+	root := s.userWorkDir(r)
+	target, rel, err := safeUserPath(root, r.URL.Query().Get("path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(root, 0755); err != nil {
+		http.Error(w, "could not create user directory", http.StatusInternalServerError)
+		return
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !info.IsDir() {
+		http.Error(w, "path is not a directory", http.StatusBadRequest)
+		return
+	}
+
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		http.Error(w, "could not read directory", http.StatusInternalServerError)
+		return
+	}
+	out := make([]fileEntry, 0, len(entries))
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		childRel := filepath.ToSlash(filepath.Join(rel, entry.Name()))
+		if rel == "." || rel == "" {
+			childRel = filepath.ToSlash(entry.Name())
+		}
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		item := fileEntry{
+			Name:    entry.Name(),
+			Path:    childRel,
+			IsDir:   entry.IsDir(),
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+			IsImage: imageExts[ext],
+		}
+		if !item.IsDir {
+			item.DownloadURL = "/api/work/files/download?path=" + urlQueryEscape(childRel)
+			if item.IsImage {
+				item.PreviewURL = "/api/work/files/preview?path=" + urlQueryEscape(childRel)
+			}
+		}
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, k int) bool {
+		if out[i].IsDir != out[k].IsDir {
+			return out[i].IsDir
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[k].Name)
+	})
+	writeJSON(w, http.StatusOK, struct {
+		Path    string      `json:"path"`
+		Entries []fileEntry `json:"entries"`
+	}{Path: rel, Entries: out})
+}
+
+func (s *server) handleWorkFileUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBody)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "invalid multipart form", http.StatusBadRequest)
+		return
+	}
+	root := s.userWorkDir(r)
+	target, _, err := safeUserPath(root, r.URL.Query().Get("path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(target, 0755); err != nil {
+		http.Error(w, "could not create upload directory", http.StatusInternalServerError)
+		return
+	}
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		http.Error(w, "files are required", http.StatusBadRequest)
+		return
+	}
+	seen := map[string]int{}
+	for _, header := range files {
+		name := sanitizeFileName(header.Filename)
+		if name == "" {
+			http.Error(w, "invalid file name", http.StatusBadRequest)
+			return
+		}
+		name = uniqueName(name, seen)
+		dest, _, err := safeUserPath(root, filepath.Join(r.URL.Query().Get("path"), name))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		src, err := header.Open()
+		if err != nil {
+			http.Error(w, "could not open upload", http.StatusBadRequest)
+			return
+		}
+		err = writeUploadedFile(src, dest)
+		if closeErr := src.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			http.Error(w, "could not save upload", http.StatusInternalServerError)
+			return
+		}
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+}
+
+func (s *server) handleWorkFileDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	root := s.userWorkDir(r)
+	target, _, err := safeUserPath(root, r.URL.Query().Get("path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(target)
+	if err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(target)))
+	http.ServeFile(w, r, target)
+}
+
+func (s *server) handleWorkFilePreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	root := s.userWorkDir(r)
+	target, _, err := safeUserPath(root, r.URL.Query().Get("path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(target)
+	if err != nil || info.IsDir() || !imageExts[strings.ToLower(filepath.Ext(target))] {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, target)
+}
+
+func (s *server) deleteWorkFile(w http.ResponseWriter, r *http.Request) {
+	root := s.userWorkDir(r)
+	target, rel, err := safeUserPath(root, r.URL.Query().Get("path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if rel == "." || rel == "" {
+		http.Error(w, "refusing to delete user root", http.StatusBadRequest)
+		return
+	}
+	if err := os.RemoveAll(target); err != nil {
+		http.Error(w, "could not delete path", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func buildCodexArgs() []string {
 	return []string{
 		"exec",
@@ -460,6 +786,9 @@ func buildCodexArgs() []string {
 }
 
 func buildCodexPrompt(j *job) string {
+	if j.Mode == "work" {
+		return j.Prompt
+	}
 	if len(j.ReferenceImages) == 0 {
 		return "use skill $imagegen : " + j.Prompt
 	}
@@ -648,6 +977,7 @@ func (j *job) snapshot() jobView {
 
 	return jobView{
 		ID:              j.ID,
+		Mode:            j.Mode,
 		Prompt:          j.Prompt,
 		WorkDir:         j.WorkDir,
 		Status:          j.Status,
@@ -686,7 +1016,11 @@ func (s *server) appendLog(j *job, format string, args ...any) {
 }
 
 func (s *server) userWorkDir(r *http.Request) string {
-	return filepath.Join(s.root, "tmp", "users", userWorkDirKey(accessEmail(r)))
+	return filepath.Join(s.root, "tmp", "users", s.userKey(r))
+}
+
+func (s *server) userKey(r *http.Request) string {
+	return userWorkDirKey(accessEmail(r))
 }
 
 func userWorkDirKey(email string) string {
@@ -833,6 +1167,41 @@ func writeUploadedFile(src io.Reader, dest string) error {
 		return err
 	}
 	return out.Close()
+}
+
+func safeUserPath(root, raw string) (string, string, error) {
+	if strings.TrimSpace(raw) == "" {
+		raw = "."
+	}
+	raw = filepath.FromSlash(strings.TrimSpace(raw))
+	if filepath.IsAbs(raw) {
+		return "", "", fmt.Errorf("absolute paths are not allowed")
+	}
+	clean := filepath.Clean(raw)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("path traversal is not allowed")
+	}
+
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	targetAbs, err := filepath.Abs(filepath.Join(rootAbs, clean))
+	if err != nil {
+		return "", "", err
+	}
+	rel, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil {
+		return "", "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", "", fmt.Errorf("path escapes user directory")
+	}
+	return targetAbs, filepath.ToSlash(rel), nil
+}
+
+func urlQueryEscape(value string) string {
+	return url.QueryEscape(filepath.ToSlash(value))
 }
 
 func sanitizeFileName(name string) string {

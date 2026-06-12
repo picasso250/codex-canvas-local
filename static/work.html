@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Work Local</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell work-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div>
+            <p class="eyebrow">本地 CLI 工作台</p>
+            <h1>Codex Work</h1>
+          </div>
+        </div>
+        <div class="topbar-meta">
+          <div class="model-chip">通用 Codex CLI</div>
+          <a class="nav-chip" href="/">Pic</a>
+          <div class="command-chip">/work</div>
+          <div class="status-pill" id="statusPill">就绪</div>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="prompt-panel" aria-labelledby="composeTitle">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">任务</p>
+              <h2 id="composeTitle">Codex 指令</h2>
+            </div>
+            <span id="promptMeta">0 字</span>
+          </div>
+
+          <form id="promptForm" class="prompt-form">
+            <label for="prompt">任务</label>
+            <textarea id="prompt" name="prompt" spellcheck="false" placeholder="阅读当前目录中的文件，帮我整理下一步实现计划"></textarea>
+            <div class="form-actions">
+              <button type="submit" id="runButton">运行 Codex</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="result-panel file-panel" aria-labelledby="filesTitle">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">文件</p>
+              <h2 id="filesTitle">用户目录</h2>
+            </div>
+            <button type="button" id="refreshFilesButton" class="icon-button" title="刷新文件" aria-label="刷新文件">↻</button>
+          </div>
+
+          <div class="path-bar">
+            <button type="button" id="upButton" class="secondary">上级</button>
+            <input id="pathInput" type="text" value=".">
+            <button type="button" id="goPathButton" class="secondary">打开</button>
+          </div>
+
+          <div class="upload-box">
+            <div class="upload-control">
+              <label class="upload-button" for="fileUpload">上传文件</label>
+              <input id="fileUpload" class="sr-only" name="files" type="file" multiple>
+              <span id="fileInputSummary">未选择文件</span>
+              <button type="button" id="uploadButton" class="secondary">上传</button>
+            </div>
+          </div>
+
+          <div id="fileList" class="file-list"></div>
+        </section>
+      </section>
+
+      <aside class="side-rail">
+        <details class="activity" id="logDetails" open>
+          <summary class="activity-summary">
+            <span>运行日志</span>
+            <span id="logSummary">等待任务</span>
+          </summary>
+          <div class="log-actions">
+            <button type="button" id="refreshButton" class="icon-button" title="刷新日志" aria-label="刷新日志">↻</button>
+          </div>
+          <pre id="logOutput">等待任务。</pre>
+        </details>
+
+        <section class="history-panel" aria-labelledby="historyTitle">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">历史</p>
+              <h2 id="historyTitle">任务记录</h2>
+            </div>
+          </div>
+          <div id="jobs" class="jobs"></div>
+        </section>
+      </aside>
+    </main>
+
+    <script src="/work.js"></script>
+  </body>
+</html>
