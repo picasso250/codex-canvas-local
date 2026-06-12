@@ -165,7 +165,8 @@ button.secondary:hover,
 }
 
 .nav-chip,
-.command-chip {
+.command-chip,
+.model-chip {
   display: none;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -178,6 +179,13 @@ button.secondary:hover,
 
 .command-chip {
   font-family: "Cascadia Mono", Consolas, monospace;
+}
+
+.model-chip {
+  display: none;
+  color: #c9d6ff;
+  border-color: rgba(76, 125, 255, 0.34);
+  background: var(--accent-soft);
 }
 
 .nav-chip {
@@ -293,6 +301,30 @@ h2 {
   display: grid;
   gap: 11px;
   margin-top: 17px;
+}
+
+.model-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.model-note strong,
+.model-note span {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 9px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.model-note strong {
+  color: #cbd6ff;
+  border-color: rgba(76, 125, 255, 0.42);
+  background: var(--accent-soft);
 }
 
 label {
@@ -636,6 +668,84 @@ pre {
   white-space: nowrap;
 }
 
+.modal-open {
+  overflow: hidden;
+}
+
+.upgrade-modal[hidden] {
+  display: none;
+}
+
+.upgrade-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: end center;
+  padding: 12px;
+}
+
+.upgrade-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(3, 5, 8, 0.72);
+  backdrop-filter: blur(14px);
+}
+
+.upgrade-dialog {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 16px;
+  width: min(100%, 520px);
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  border: 1px solid rgba(97, 111, 132, 0.82);
+  border-radius: 8px;
+  padding: 18px;
+  background:
+    radial-gradient(circle at 80% 0, rgba(76, 125, 255, 0.16), transparent 16rem),
+    linear-gradient(180deg, rgba(24, 29, 36, 0.98), rgba(12, 15, 20, 0.98));
+  box-shadow: var(--shadow-lg);
+}
+
+.upgrade-dialog h2 {
+  margin-top: -8px;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.upgrade-intro {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.62;
+}
+
+.upgrade-list {
+  display: grid;
+  gap: 10px;
+}
+
+.upgrade-list div {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.upgrade-list strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.upgrade-list span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 @media (max-width: 380px) {
   .topbar {
     align-items: flex-start;
@@ -654,7 +764,8 @@ pre {
   }
 
   .nav-chip,
-  .command-chip {
+  .command-chip,
+  .model-chip {
     display: block;
   }
 
@@ -668,6 +779,15 @@ pre {
 
   .gallery {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .upgrade-modal {
+    place-items: center;
+    padding: 18px;
+  }
+
+  .upgrade-dialog {
+    padding: 22px;
   }
 }
 

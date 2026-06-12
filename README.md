@@ -36,7 +36,7 @@ data/audit.jsonl
 
 Each line is one JSON event with the job ID, timestamp, Cloudflare Access email
 when present, client IP, user agent, original prompt, Codex args, Codex stdin,
-session workdir, and reference image paths. The service rejects a new job if the
+user workdir, and reference image paths. The service rejects a new job if the
 audit event cannot be written.
 
 Quick inspection:
@@ -44,6 +44,38 @@ Quick inspection:
 ```powershell
 Get-Content .\data\audit.jsonl | ConvertFrom-Json | Select-Object createdAt,email,ip,jobId,prompt
 ```
+
+## Workdirs
+
+Codex runs in a persistent per-user workdir so follow-up jobs can see the same
+user's previous uploads, generated images, and intermediate files:
+
+```text
+tmp/users/<user-key>/
+```
+
+When a Cloudflare Access email is present, the key is derived from that email.
+Requests without an email share:
+
+```text
+tmp/users/local/
+```
+
+Reference uploads are stored under the user's workdir:
+
+```text
+tmp/users/<user-key>/uploads/<jobId>/
+```
+
+Final images shown in the UI are still copied into the job result directory:
+
+```text
+runs/<jobId>/
+```
+
+The result collector deduplicates images by SHA256 before copying them into
+`runs/<jobId>/`, so a Codex-generated image found in both the default cache and
+the user workdir is displayed once.
 
 ## Public Access
 

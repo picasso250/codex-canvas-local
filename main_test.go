@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -72,6 +73,71 @@ func TestWriteAuditEventAppendsJSONLine(t *testing.T) {
 	}
 }
 
+func TestUserWorkDirKey(t *testing.T) {
+	if got := userWorkDirKey(""); got != "local" {
+		t.Fatalf("empty user key = %q", got)
+	}
+
+	first := userWorkDirKey("User@example.com")
+	second := userWorkDirKey(" user@example.com ")
+	if first != second {
+		t.Fatalf("user key should be stable: %q != %q", first, second)
+	}
+	if !strings.HasPrefix(first, "user-") {
+		t.Fatalf("user key should keep readable prefix: %q", first)
+	}
+}
+
+func TestCollectImagesDeduplicatesByHash(t *testing.T) {
+	root := t.TempDir()
+	s := &server{root: root}
+	workDir := filepath.Join(root, "tmp", "users", "user")
+	generatedDir := filepath.Join(root, "tmp", "imagegen")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(generatedDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	friendly := filepath.Join(workDir, "edited-detail.png")
+	defaultName := filepath.Join(generatedDir, "ig_123.png")
+	other := filepath.Join(generatedDir, "ig_456.png")
+	writeTestFile(t, friendly, []byte("same image"))
+	writeTestFile(t, defaultName, []byte("same image"))
+	writeTestFile(t, other, []byte("different image"))
+
+	j := &job{ID: "job123", WorkDir: workDir}
+	images := s.collectImages(j, map[string]time.Time{}, time.Now().Add(-time.Minute))
+	if len(images) != 2 {
+		t.Fatalf("images = %#v", images)
+	}
+	if images[0].Name != "edited-detail.png" && images[1].Name != "edited-detail.png" {
+		t.Fatalf("dedupe should keep friendly name: %#v", images)
+	}
+}
+
+func TestCollectImagesIncludesUpdatedPersistentFile(t *testing.T) {
+	root := t.TempDir()
+	s := &server{root: root}
+	workDir := filepath.Join(root, "tmp", "users", "user")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(workDir, "output.png")
+	writeTestFile(t, path, []byte("updated image"))
+	before := map[string]time.Time{
+		path: time.Now().Add(-time.Minute),
+	}
+
+	j := &job{ID: "job123", WorkDir: workDir}
+	images := s.collectImages(j, before, time.Now().Add(-time.Second))
+	if len(images) != 1 || images[0].Name != "output.png" {
+		t.Fatalf("images = %#v", images)
+	}
+}
+
 func mustReadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -79,4 +145,11 @@ func mustReadFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+func writeTestFile(t *testing.T, path string, content []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
 }

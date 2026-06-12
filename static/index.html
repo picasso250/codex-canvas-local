@@ -17,6 +17,7 @@
           </div>
         </div>
         <div class="topbar-meta">
+          <div class="model-chip">基于 OpenAI GPT Image 2 模型</div>
           <div class="nav-chip">创作</div>
           <div class="command-chip">本地执行</div>
           <div class="status-pill" id="statusPill">就绪</div>
@@ -33,6 +34,14 @@
             <span id="promptMeta">0 字</span>
           </div>
 
+          <div class="model-note" aria-label="模型能力">
+            <strong>GPT Image 2</strong>
+            <span>高质量生成</span>
+            <span>参考图编辑</span>
+            <span>文字渲染增强</span>
+            <span>多图输出</span>
+          </div>
+
           <form id="promptForm" class="prompt-form">
             <label for="prompt">提示词</label>
             <textarea id="prompt" name="prompt" spellcheck="false" placeholder="雨后傍晚的小学门口小卖部，真实纪实摄影，地面微湿有反光，不要文字水印"></textarea>
@@ -41,7 +50,7 @@
             <div class="upload-box">
               <div class="upload-control">
                 <label class="upload-button" for="referenceImages">选择图片</label>
-                <input id="referenceImages" class="sr-only" name="images" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+                <input id="referenceImages" class="sr-only" name="images" type="file" accept="image/png,image/jpeg,.jfif,image/webp,image/gif" multiple>
                 <span id="fileInputSummary">未选择文件</span>
                 <span id="referenceMeta">0 张参考图</span>
               </div>
@@ -94,6 +103,29 @@
         </section>
       </aside>
     </main>
+
+    <div class="upgrade-modal" id="upgradeModal" hidden>
+      <div class="upgrade-backdrop" data-upgrade-close></div>
+      <section class="upgrade-dialog" role="dialog" aria-modal="true" aria-labelledby="upgradeTitle">
+        <p class="section-kicker">本次升级</p>
+        <h2 id="upgradeTitle">更适合连续创作的图片工作台</h2>
+        <div class="upgrade-list">
+          <div>
+            <strong>用户持久工作区</strong>
+            <span>同一用户的参考图、历史输出和中间文件会保留在自己的运行目录里。</span>
+          </div>
+          <div>
+            <strong>历史上下文可见</strong>
+            <span>连续改图时，Codex 可以看到同一用户之前的素材和结果。</span>
+          </div>
+          <div>
+            <strong>结果自动去重</strong>
+            <span>同一张图片即使出现在多个生成目录，也只会在结果区显示一次。</span>
+          </div>
+        </div>
+        <button type="button" id="upgradeDismiss">我知道了</button>
+      </section>
+    </div>
 
     <script src="/app.js"></script>
   </body>

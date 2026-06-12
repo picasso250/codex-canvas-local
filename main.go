@@ -37,7 +37,7 @@ const (
 )
 
 var imageExts = map[string]bool{
-	".png": true, ".jpg": true, ".jpeg": true, ".webp": true, ".gif": true,
+	".png": true, ".jpg": true, ".jpeg": true, ".jfif": true, ".webp": true, ".gif": true,
 }
 
 type server struct {
@@ -121,7 +121,7 @@ func main() {
 	if err := os.MkdirAll(filepath.Join(root, "runs"), 0755); err != nil {
 		log.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "tmp", "sessions"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "tmp", "users"), 0755); err != nil {
 		log.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, "data"), 0700); err != nil {
@@ -234,8 +234,8 @@ func (s *server) createJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workDir := filepath.Join(s.root, "tmp", "sessions", id)
-	uploadsDir := filepath.Join(workDir, "uploads")
+	workDir := s.userWorkDir(r)
+	uploadsDir := filepath.Join(workDir, "uploads", id)
 	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
 		http.Error(w, "could not create session directory", http.StatusInternalServerError)
 		return
@@ -448,7 +448,15 @@ func (s *server) saveReferenceImages(r *http.Request, uploadsDir string) ([]refe
 }
 
 func buildCodexArgs() []string {
-	return []string{"exec", "--disable", "memories", "--skip-git-repo-check", "--sandbox", "workspace-write", "--color", "never"}
+	return []string{
+		"exec",
+		"--model", "gpt-5.5",
+		"-c", `model_reasoning_effort="low"`,
+		"--disable", "memories",
+		"--skip-git-repo-check",
+		"--sandbox", "workspace-write",
+		"--color", "never",
+	}
 }
 
 func buildCodexPrompt(j *job) string {
@@ -469,12 +477,12 @@ func buildCodexPrompt(j *job) string {
 	return b.String()
 }
 
-func (s *server) collectImages(j *job, before map[string]struct{}, started time.Time) []imageInfo {
+func (s *server) collectImages(j *job, before map[string]time.Time, started time.Time) []imageInfo {
 	discovered := knownImages(s.root, j.WorkDir)
 	logPaths := imagePathsFromText(j.snapshot().Log)
 	for _, p := range logPaths {
 		if abs, err := filepath.Abs(p); err == nil {
-			discovered[abs] = struct{}{}
+			discovered[abs] = time.Time{}
 		}
 	}
 
@@ -486,12 +494,13 @@ func (s *server) collectImages(j *job, before map[string]struct{}, started time.
 
 	var out []imageInfo
 	seenNames := map[string]int{}
+	var candidates []imageCandidate
 	for p := range discovered {
-		if _, existed := before[p]; existed {
-			continue
-		}
 		info, err := os.Stat(p)
 		if err != nil || info.IsDir() {
+			continue
+		}
+		if beforeModTime, existed := before[p]; existed && !info.ModTime().After(beforeModTime) {
 			continue
 		}
 		if info.ModTime().Before(started.Add(-5 * time.Second)) {
@@ -500,15 +509,38 @@ func (s *server) collectImages(j *job, before map[string]struct{}, started time.
 		if !imageExts[strings.ToLower(filepath.Ext(p))] {
 			continue
 		}
+		hash, err := fileSHA256(p)
+		if err != nil {
+			s.appendLog(j, "\nCould not hash generated image %s: %v\n", p, err)
+			continue
+		}
+		candidates = append(candidates, imageCandidate{
+			Path:    p,
+			Hash:    hash,
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+		})
+	}
 
-		name := sanitizeFileName(filepath.Base(p))
+	sort.Slice(candidates, func(i, k int) bool {
+		return betterImageCandidate(candidates[i], candidates[k])
+	})
+
+	seenHashes := map[string]struct{}{}
+	for _, candidate := range candidates {
+		if _, ok := seenHashes[candidate.Hash]; ok {
+			continue
+		}
+		seenHashes[candidate.Hash] = struct{}{}
+
+		name := sanitizeFileName(filepath.Base(candidate.Path))
 		if name == "" {
-			name = "image" + strings.ToLower(filepath.Ext(p))
+			name = "image" + strings.ToLower(filepath.Ext(candidate.Path))
 		}
 		name = uniqueName(name, seenNames)
 		dest := filepath.Join(destDir, name)
-		if err := copyFile(p, dest); err != nil {
-			s.appendLog(j, "\nCould not copy generated image %s: %v\n", p, err)
+		if err := copyFile(candidate.Path, dest); err != nil {
+			s.appendLog(j, "\nCould not copy generated image %s: %v\n", candidate.Path, err)
 			continue
 		}
 		if copied, err := os.Stat(dest); err == nil {
@@ -524,9 +556,30 @@ func (s *server) collectImages(j *job, before map[string]struct{}, started time.
 	return out
 }
 
-func knownImages(root string, extraDirs ...string) map[string]struct{} {
+type imageCandidate struct {
+	Path    string
+	Hash    string
+	Size    int64
+	ModTime time.Time
+}
+
+func betterImageCandidate(a, b imageCandidate) bool {
+	aName := strings.ToLower(filepath.Base(a.Path))
+	bName := strings.ToLower(filepath.Base(b.Path))
+	aDefault := strings.HasPrefix(aName, "ig_")
+	bDefault := strings.HasPrefix(bName, "ig_")
+	if aDefault != bDefault {
+		return !aDefault
+	}
+	if !a.ModTime.Equal(b.ModTime) {
+		return a.ModTime.After(b.ModTime)
+	}
+	return aName < bName
+}
+
+func knownImages(root string, extraDirs ...string) map[string]time.Time {
 	dirs := imageSearchDirs(root, extraDirs...)
-	found := make(map[string]struct{})
+	found := make(map[string]time.Time)
 	for _, dir := range dirs {
 		filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
@@ -537,7 +590,9 @@ func knownImages(root string, extraDirs ...string) map[string]struct{} {
 			}
 			abs, err := filepath.Abs(path)
 			if err == nil {
-				found[abs] = struct{}{}
+				if info, statErr := d.Info(); statErr == nil {
+					found[abs] = info.ModTime()
+				}
 			}
 			return nil
 		})
@@ -578,7 +633,7 @@ func imageSearchDirs(root string, extraDirs ...string) []string {
 }
 
 func imagePathsFromText(text string) []string {
-	re := regexp.MustCompile(`(?i)([A-Za-z]:\\[^\r\n"'<>|]+?\.(?:png|jpe?g|webp|gif)|/[^\s"'<>|]+?\.(?:png|jpe?g|webp|gif))`)
+	re := regexp.MustCompile(`(?i)([A-Za-z]:\\[^\r\n"'<>|]+?\.(?:png|jpe?g|jfif|webp|gif)|/[^\s"'<>|]+?\.(?:png|jpe?g|jfif|webp|gif))`)
 	matches := re.FindAllString(text, -1)
 	paths := make([]string, 0, len(matches))
 	for _, m := range matches {
@@ -630,12 +685,28 @@ func (s *server) appendLog(j *job, format string, args ...any) {
 	j.Log += fmt.Sprintf(format, args...)
 }
 
+func (s *server) userWorkDir(r *http.Request) string {
+	return filepath.Join(s.root, "tmp", "users", userWorkDirKey(accessEmail(r)))
+}
+
+func userWorkDirKey(email string) string {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return "local"
+	}
+	sum := sha256.Sum256([]byte(email))
+	prefix := sanitizeFileName(strings.Split(email, "@")[0])
+	if prefix == "" {
+		prefix = "user"
+	}
+	if len(prefix) > 32 {
+		prefix = prefix[:32]
+	}
+	return prefix + "-" + hex.EncodeToString(sum[:])[:16]
+}
+
 func newAuditEvent(r *http.Request, j *job) auditEvent {
-	email := firstHeader(r,
-		"Cf-Access-Authenticated-User-Email",
-		"CF-Access-Authenticated-User-Email",
-		"X-Forwarded-Email",
-	)
+	email := accessEmail(r)
 
 	return auditEvent{
 		Event:           "job_created",
@@ -652,6 +723,14 @@ func newAuditEvent(r *http.Request, j *job) auditEvent {
 		WorkDir:         j.WorkDir,
 		ReferenceImages: append([]referenceInfo(nil), j.ReferenceImages...),
 	}
+}
+
+func accessEmail(r *http.Request) string {
+	return firstHeader(r,
+		"Cf-Access-Authenticated-User-Email",
+		"CF-Access-Authenticated-User-Email",
+		"X-Forwarded-Email",
+	)
 }
 
 func (s *server) writeAuditEvent(event auditEvent) error {
@@ -727,6 +806,20 @@ func copyFile(src, dest string) error {
 		return err
 	}
 	return out.Close()
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func writeUploadedFile(src io.Reader, dest string) error {

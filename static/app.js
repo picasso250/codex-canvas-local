@@ -14,10 +14,13 @@ const logOutput = document.querySelector("#logOutput");
 const gallery = document.querySelector("#gallery");
 const imageCount = document.querySelector("#imageCount");
 const jobsEl = document.querySelector("#jobs");
+const upgradeModal = document.querySelector("#upgradeModal");
+const upgradeDismiss = document.querySelector("#upgradeDismiss");
 
 let activeJobId = null;
 let pollTimer = null;
 const autoCollapsedJobs = new Set();
+const upgradeNoticeKey = "codexCanvas.upgradeNotice.gptImage2Workdir.v1";
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -64,6 +67,8 @@ refreshButton.addEventListener("click", async () => {
   if (activeJobId) await fetchJob(activeJobId);
   await loadJobs();
 });
+
+upgradeDismiss.addEventListener("click", dismissUpgradeNotice);
 
 function startPolling(id) {
   if (pollTimer) clearInterval(pollTimer);
@@ -227,6 +232,20 @@ function escapeHTML(value) {
     .replaceAll("'", "&#039;");
 }
 
+function showUpgradeNotice() {
+  if (!upgradeModal || localStorage.getItem(upgradeNoticeKey) === "dismissed") return;
+  upgradeModal.hidden = false;
+  document.body.classList.add("modal-open");
+  upgradeDismiss.focus();
+}
+
+function dismissUpgradeNotice() {
+  localStorage.setItem(upgradeNoticeKey, "dismissed");
+  upgradeModal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
 loadJobs();
 renderReferenceList();
 renderPromptMeta();
+showUpgradeNotice();
