@@ -1,0 +1,174 @@
+/* File browser, empty states, and image cards */
+
+.path-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.file-panel {
+  align-content: start;
+}
+
+.file-list {
+  display: grid;
+  gap: 8px;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.file-preview {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #090c10;
+}
+
+.file-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.file-icon {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.file-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.file-main span,
+.file-link {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-main > span:last-child {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-link {
+  min-height: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+}
+
+.file-link:hover {
+  background: transparent;
+  color: #c9d6ff;
+}
+
+.file-actions {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.file-actions button {
+  min-height: 36px;
+}
+
+.file-action {
+  display: inline-grid;
+  min-height: 36px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--ink);
+  background: #151a20;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.compact-empty {
+  min-height: 150px;
+}
+
+.empty-state {
+  display: grid;
+  width: 100%;
+  min-height: 250px;
+  place-items: center;
+  align-content: center;
+  gap: 15px;
+  border: 1px solid rgba(201, 164, 93, 0.24);
+  border-radius: 8px;
+  padding: 24px;
+  color: var(--muted);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
+    radial-gradient(circle at 50% 38%, rgba(201, 164, 93, 0.12), transparent 12rem),
+    #0b0f14;
+  text-align: center;
+}
+
+.empty-glyph {
+  width: 64px;
+  height: 64px;
+  border: 1px solid rgba(201, 164, 93, 0.44);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, transparent 46%, rgba(201, 164, 93, 0.58) 47% 50%, transparent 51%),
+    linear-gradient(145deg, #272016, #12100d);
+  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.empty-state p {
+  max-width: 270px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.52;
+}
+
+.image-card {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.image-card img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+  background: #090c10;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+}
+
+.image-card span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

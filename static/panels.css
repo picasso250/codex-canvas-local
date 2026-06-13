@@ -1,0 +1,19 @@
+/* Result panel and gallery layout */
+
+.result-panel {
+  display: grid;
+  gap: 14px;
+  min-height: 330px;
+}
+
+.gallery {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  min-height: 250px;
+}
+
+.gallery.empty {
+  display: block;
+}
+

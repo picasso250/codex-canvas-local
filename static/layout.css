@@ -1,0 +1,35 @@
+/* Main layout shell and page regions */
+
+.workspace {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.side-rail {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.prompt-panel,
+.result-panel,
+.audit-panel,
+.history-panel {
+  padding: 15px;
+}
+
+.section-head,
+.activity-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.section-head span {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 780;
+}
+

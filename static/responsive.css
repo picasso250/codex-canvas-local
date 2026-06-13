@@ -1,0 +1,110 @@
+/* Responsive breakpoints */
+
+@media (max-width: 380px) {
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .topbar-meta {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+@media (min-width: 520px) {
+  .app-shell {
+    padding: 18px;
+  }
+
+  .nav-chip,
+  .command-chip,
+  .model-chip {
+    display: block;
+  }
+
+  .form-actions {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  button.secondary {
+    min-width: 104px;
+  }
+
+  .audit-filter {
+    grid-template-columns: auto minmax(180px, 1fr) auto auto;
+  }
+
+  .gallery {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .upgrade-modal {
+    place-items: center;
+    padding: 18px;
+  }
+
+  .upgrade-dialog {
+    padding: 22px;
+  }
+}
+
+@media (min-width: 960px) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr) 380px;
+    grid-template-areas:
+      "top top"
+      "work rail";
+    align-items: start;
+    gap: 16px;
+    padding: 22px;
+  }
+
+  .topbar {
+    grid-area: top;
+    padding: 14px 16px;
+  }
+
+  .workspace {
+    grid-area: work;
+    grid-template-columns: minmax(350px, 430px) minmax(0, 1fr);
+    align-items: start;
+    gap: 16px;
+  }
+
+  .side-rail {
+    grid-area: rail;
+    gap: 16px;
+  }
+
+  .prompt-panel,
+  .result-panel,
+.audit-panel,
+  .history-panel {
+    padding: 18px;
+  }
+
+  .history-panel {
+    max-height: calc(100vh - 330px);
+    overflow: auto;
+  }
+
+  .gallery {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    min-height: 520px;
+  }
+
+  .empty-state {
+    min-height: 520px;
+  }
+}
+
+@media (min-width: 1240px) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr) 400px;
+  }
+
+  .workspace {
+    grid-template-columns: 440px minmax(0, 1fr);
+  }
+}
