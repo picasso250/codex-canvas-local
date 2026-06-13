@@ -269,6 +269,30 @@ func TestBuildCodexPromptWorkModePassesThrough(t *testing.T) {
 	}
 }
 
+func TestSubmittedNotificationIncludesEmailAndFullPrompt(t *testing.T) {
+	prompt := "line one\nline two\n完整提示词"
+	j := &job{Email: "user@example.com", Prompt: prompt}
+
+	got := submittedNotificationMessage(j)
+	if !strings.Contains(got, "User: user@example.com") {
+		t.Fatalf("notification missing email: %q", got)
+	}
+	if !strings.Contains(got, prompt) {
+		t.Fatalf("notification missing full prompt: %q", got)
+	}
+}
+
+func TestFinishedNotificationIncludesExitCodeAndFailureText(t *testing.T) {
+	j := &job{ID: "job123", Email: "user@example.com", Error: "codex exited with error: exit status 7"}
+
+	got := finishedNotificationMessage(j, 7)
+	for _, want := range []string{"User: user@example.com", "Job: job123", "Exit code: 7", "FAILED:", j.Error} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("notification missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestSafeUserPathRejectsTraversalAndRootDelete(t *testing.T) {
 	root := t.TempDir()
 	if _, _, err := safeUserPath(root, `..\other`); err == nil {

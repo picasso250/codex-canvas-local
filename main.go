@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -32,9 +33,11 @@ var staticFiles embed.FS
 
 const (
 	defaultAddr   = "127.0.0.1:8765"
+	notifyURL     = "http://127.0.0.1:8787/notify"
 	runTimeout    = 20 * time.Minute
 	maxPrompt     = 12000
 	maxUploadBody = 128 << 20
+	notifyTimeout = 1500 * time.Millisecond
 )
 
 var imageExts = map[string]bool{
@@ -54,6 +57,7 @@ type job struct {
 	ID         string      `json:"id"`
 	Mode       string      `json:"mode"`
 	UserKey    string      `json:"-"`
+	Email      string      `json:"-"`
 	Prompt     string      `json:"prompt"`
 	WorkDir    string      `json:"workDir"`
 	Status     string      `json:"status"`
@@ -433,6 +437,7 @@ func (s *server) createWorkJob(w http.ResponseWriter, r *http.Request) {
 		ID:        id,
 		Mode:      "work",
 		UserKey:   s.userKey(r),
+		Email:     displayEmail(accessEmail(r)),
 		Prompt:    prompt,
 		WorkDir:   s.userWorkDir(r),
 		Status:    "queued",
@@ -451,11 +456,17 @@ func (s *server) createWorkJob(w http.ResponseWriter, r *http.Request) {
 	s.jobs[id] = j
 	s.mu.Unlock()
 
+	go s.notifyJobSubmitted(j)
 	go s.runJob(j)
 	writeJSON(w, http.StatusAccepted, createJobResponse{ID: id})
 }
 
 func (s *server) runJob(j *job) {
+	exitCode := -1
+	defer func() {
+		s.notifyJobFinished(j, exitCode)
+	}()
+
 	s.appendLog(j, "Waiting for the local Codex runner...\n")
 	s.sem <- struct{}{}
 	defer func() { <-s.sem }()
@@ -505,6 +516,7 @@ func (s *server) runJob(j *job) {
 
 	waitErr := cmd.Wait()
 	wg.Wait()
+	exitCode = cmd.ProcessState.ExitCode()
 
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		j.fail(fmt.Errorf("codex timed out after %s", runTimeout))
@@ -525,6 +537,66 @@ func (s *server) runJob(j *job) {
 	j.FinishedAt = &now
 	j.Status = "succeeded"
 	j.mu.Unlock()
+}
+
+func (s *server) notifyJobSubmitted(j *job) {
+	s.sendNotification("New Codex prompt", submittedNotificationMessage(j), 15000, j)
+}
+
+func (s *server) notifyJobFinished(j *job, exitCode int) {
+	s.sendNotification("Codex job finished", finishedNotificationMessage(j, exitCode), 10000, j)
+}
+
+func submittedNotificationMessage(j *job) string {
+	return fmt.Sprintf("User: %s\n\nPrompt:\n%s", j.Email, j.Prompt)
+}
+
+func finishedNotificationMessage(j *job, exitCode int) string {
+	status := j.snapshot()
+	message := fmt.Sprintf("User: %s\nJob: %s\nExit code: %d", j.Email, j.ID, exitCode)
+	if exitCode != 0 {
+		failure := strings.TrimSpace(status.Error)
+		if failure == "" {
+			failure = "Job failed."
+		}
+		message += "\n\nFAILED: " + failure
+	}
+	return message
+}
+
+func (s *server) sendNotification(title, message string, durationMs int, j *job) {
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(struct {
+		Title      string `json:"title"`
+		Message    string `json:"message"`
+		DurationMs int    `json:"durationMs"`
+	}{
+		Title:      title,
+		Message:    message,
+		DurationMs: durationMs,
+	}); err != nil {
+		s.appendLog(j, "Notification encode failed: %v\n", err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), notifyTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, notifyURL, &body)
+	if err != nil {
+		s.appendLog(j, "Notification request failed: %v\n", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.appendLog(j, "Notification delivery failed: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		s.appendLog(j, "Notification delivery returned HTTP %d\n", resp.StatusCode)
+	}
 }
 
 func streamPipe(wg *sync.WaitGroup, r io.Reader, appendLine func(string)) {
@@ -1042,6 +1114,14 @@ func accessEmail(r *http.Request) string {
 		"CF-Access-Authenticated-User-Email",
 		"X-Forwarded-Email",
 	)
+}
+
+func displayEmail(email string) string {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return "local"
+	}
+	return email
 }
 
 func isLocalUser(r *http.Request) bool {
