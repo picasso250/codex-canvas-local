@@ -23,7 +23,12 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 9px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--surface);
+  transition: box-shadow 0.12s;
+}
+
+.file-row:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
 }
 
 .file-preview {
@@ -34,7 +39,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #090c10;
+  background: var(--bg);
 }
 
 .file-preview img {
@@ -44,9 +49,9 @@
 }
 
 .file-icon {
-  color: var(--muted);
+  color: var(--faint);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .file-main {
@@ -79,7 +84,7 @@
 
 .file-link:hover {
   background: transparent;
-  color: #c9d6ff;
+  color: var(--accent);
 }
 
 .file-actions {
@@ -100,14 +105,19 @@
   border-radius: 8px;
   padding: 0 12px;
   color: var(--ink);
-  background: #151a20;
+  background: #ffffff;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 600;
   text-decoration: none;
+  transition: background 0.12s;
+}
+
+.file-action:hover {
+  background: var(--bg-soft);
 }
 
 .compact-empty {
-  min-height: 150px;
+  min-height: 120px;
 }
 
 .empty-state {
@@ -117,58 +127,31 @@
   place-items: center;
   align-content: center;
   gap: 15px;
-  border: 1px solid rgba(201, 164, 93, 0.24);
-  border-radius: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
   padding: 24px;
   color: var(--muted);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
-    radial-gradient(circle at 50% 38%, rgba(201, 164, 93, 0.12), transparent 12rem),
-    #0b0f14;
+  background: var(--bg);
   text-align: center;
 }
 
 .empty-glyph {
   width: 64px;
   height: 64px;
-  border: 1px solid rgba(201, 164, 93, 0.44);
+  border: 1px solid rgba(168, 130, 48, 0.35);
   border-radius: 8px;
   background:
-    linear-gradient(135deg, transparent 46%, rgba(201, 164, 93, 0.58) 47% 50%, transparent 51%),
-    linear-gradient(145deg, #272016, #12100d);
-  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    linear-gradient(135deg, transparent 46%, rgba(168, 130, 48, 0.50) 47% 50%, transparent 51%),
+    linear-gradient(145deg, #f5efe4, #ebe3d4);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 .empty-state p {
   max-width: 270px;
-  color: var(--text);
+  color: var(--muted);
   font-size: 14px;
   line-height: 1.52;
 }
 
-.image-card {
-  display: grid;
-  gap: 9px;
-  min-width: 0;
-  color: var(--text);
-  text-decoration: none;
-}
 
-.image-card img {
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  object-fit: contain;
-  background: #090c10;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: var(--shadow-lg);
-}
-
-.image-card span {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 

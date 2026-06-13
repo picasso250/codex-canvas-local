@@ -25,8 +25,13 @@
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.04);
-  font-weight: 850;
+  background: var(--bg);
+  font-weight: 600;
+  transition: background 0.12s;
+}
+
+.activity-summary:hover::after {
+  background: var(--bg-soft);
 }
 
 .activity[open] .activity-summary::after {
@@ -36,14 +41,14 @@
 .activity-summary span:first-child {
   color: var(--ink);
   font-size: 14px;
-  font-weight: 820;
+  font-weight: 600;
 }
 
 .activity-summary span:last-child {
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 730;
+  font-weight: 530;
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -59,8 +64,8 @@
   width: 36px;
   min-height: 36px;
   padding: 0;
-  color: var(--text);
-  background: #141922;
+  color: var(--muted);
+  background: var(--surface);
   border-color: var(--border-strong);
   box-shadow: none;
 }
@@ -72,8 +77,8 @@ pre {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 13px;
-  color: #c7d0dc;
-  background: #090c10;
+  color: var(--ink);
+  background: var(--bg);
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
   line-height: 1.58;
@@ -126,12 +131,16 @@ pre {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--surface);
+}
+
+.audit-row:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
 }
 
 .audit-row-error {
-  border-color: rgba(255, 138, 124, 0.42);
-  background: rgba(255, 138, 124, 0.07);
+  border-color: rgba(228, 85, 69, 0.35);
+  background: rgba(228, 85, 69, 0.05);
 }
 
 .audit-row-head {
@@ -178,11 +187,11 @@ pre {
 .audit-prompt {
   max-height: 110px;
   overflow: auto;
-  border: 1px solid rgba(201, 164, 93, 0.22);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px;
   color: var(--text);
-  background: rgba(201, 164, 93, 0.045);
+  background: var(--bg);
   font-size: 13px;
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -211,15 +220,20 @@ pre {
   border-radius: 8px;
   padding: 11px;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--surface);
   box-shadow: none;
   text-align: left;
+  transition: border-color 0.12s, background 0.12s;
 }
 
-.job-item:hover,
+.job-item:hover {
+  border-color: var(--border-strong);
+  background: var(--bg);
+}
+
 .job-item.active {
-  border-color: rgba(106, 145, 255, 0.58);
-  background: rgba(76, 125, 255, 0.10);
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .job-status {
@@ -229,26 +243,26 @@ pre {
   border-radius: 999px;
   padding: 4px 8px;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.055);
+  background: var(--bg);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
   text-align: center;
 }
 
 .job-status.running,
 .job-status.queued {
-  color: #b9c9ff;
-  background: rgba(76, 125, 255, 0.18);
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .job-status.succeeded {
   color: var(--ok);
-  background: rgba(117, 215, 160, 0.13);
+  background: rgba(45, 157, 110, 0.08);
 }
 
 .job-status.failed {
   color: var(--danger);
-  background: rgba(255, 138, 124, 0.13);
+  background: rgba(228, 85, 69, 0.08);
 }
 
 .job-prompt {
@@ -288,8 +302,8 @@ pre {
 .upgrade-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(3, 5, 8, 0.72);
-  backdrop-filter: blur(14px);
+  background: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(8px);
 }
 
 .upgrade-dialog {
@@ -300,12 +314,10 @@ pre {
   width: min(100%, 520px);
   max-height: calc(100vh - 24px);
   overflow: auto;
-  border: 1px solid rgba(97, 111, 132, 0.82);
-  border-radius: 8px;
-  padding: 18px;
-  background:
-    radial-gradient(circle at 80% 0, rgba(76, 125, 255, 0.16), transparent 16rem),
-    linear-gradient(180deg, rgba(24, 29, 36, 0.98), rgba(12, 15, 20, 0.98));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  background: var(--surface);
   box-shadow: var(--shadow-lg);
 }
 
@@ -332,7 +344,7 @@ pre {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--bg);
 }
 
 .upgrade-list strong {
