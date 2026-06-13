@@ -67,15 +67,22 @@ Reference uploads are stored under the user's workdir:
 tmp/users/<user-key>/uploads/<jobId>/
 ```
 
-Final images shown in the UI are still copied into the job result directory:
+Final images shown in the UI are collected into the user's workdir:
 
 ```text
-runs/<jobId>/
+tmp/users/<user-key>/outputs/<jobId>/
+```
+
+They are also mirrored to a public static image path that keeps direct browser
+preview and right-click save behavior:
+
+```text
+runs/users/<public-user-key>/outputs/<jobId>/
 ```
 
 The result collector deduplicates images by SHA256 before copying them into
-`runs/<jobId>/`, so a Codex-generated image found in both the default cache and
-the user workdir is displayed once.
+the output directories, so a Codex-generated image found in both the default
+cache and the user workdir is displayed once.
 
 ## Public Access
 

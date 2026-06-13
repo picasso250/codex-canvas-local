@@ -194,13 +194,22 @@ func TestCollectImagesDeduplicatesByHash(t *testing.T) {
 	writeTestFile(t, defaultName, []byte("same image"))
 	writeTestFile(t, other, []byte("different image"))
 
-	j := &job{ID: "job123", WorkDir: workDir}
+	j := &job{ID: "job123", UserKey: "user-readable", WorkDir: workDir}
 	images := s.collectImages(j, map[string]time.Time{}, time.Now().Add(-time.Minute))
 	if len(images) != 2 {
 		t.Fatalf("images = %#v", images)
 	}
 	if images[0].Name != "edited-detail.png" && images[1].Name != "edited-detail.png" {
 		t.Fatalf("dedupe should keep friendly name: %#v", images)
+	}
+	if !strings.HasPrefix(images[0].URL, "/runs/users/"+publicUserKey(j.UserKey)+"/outputs/job123/") {
+		t.Fatalf("image url should use public user output path: %#v", images)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "outputs", "job123", "edited-detail.png")); err != nil {
+		t.Fatalf("work output missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "runs", "users", publicUserKey(j.UserKey), "outputs", "job123", "edited-detail.png")); err != nil {
+		t.Fatalf("public output missing: %v", err)
 	}
 }
 
@@ -219,10 +228,13 @@ func TestCollectImagesIncludesUpdatedPersistentFile(t *testing.T) {
 		path: time.Now().Add(-time.Minute),
 	}
 
-	j := &job{ID: "job123", WorkDir: workDir}
+	j := &job{ID: "job123", UserKey: "user-readable", WorkDir: workDir}
 	images := s.collectImages(j, before, time.Now().Add(-time.Second))
 	if len(images) != 1 || images[0].Name != "output.png" {
 		t.Fatalf("images = %#v", images)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "outputs", "job123", "output.png")); err != nil {
+		t.Fatalf("work output missing: %v", err)
 	}
 }
 

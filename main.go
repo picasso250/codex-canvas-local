@@ -778,9 +778,15 @@ func (s *server) collectImages(j *job, before map[string]time.Time, started time
 		}
 	}
 
-	destDir := filepath.Join(s.root, "runs", j.ID)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
+	workOutputDir := filepath.Join(j.WorkDir, "outputs", j.ID)
+	runsRelDir := filepath.ToSlash(filepath.Join("users", publicUserKey(j.UserKey), "outputs", j.ID))
+	runsDir := filepath.Join(s.root, "runs", filepath.FromSlash(runsRelDir))
+	if err := os.MkdirAll(workOutputDir, 0755); err != nil {
 		s.appendLog(j, "\nCould not create image output directory: %v\n", err)
+		return nil
+	}
+	if err := os.MkdirAll(runsDir, 0755); err != nil {
+		s.appendLog(j, "\nCould not create public image output directory: %v\n", err)
 		return nil
 	}
 
@@ -830,15 +836,20 @@ func (s *server) collectImages(j *job, before map[string]time.Time, started time
 			name = "image" + strings.ToLower(filepath.Ext(candidate.Path))
 		}
 		name = uniqueName(name, seenNames)
-		dest := filepath.Join(destDir, name)
-		if err := copyFile(candidate.Path, dest); err != nil {
+		workDest := filepath.Join(workOutputDir, name)
+		if err := copyFile(candidate.Path, workDest); err != nil {
 			s.appendLog(j, "\nCould not copy generated image %s: %v\n", candidate.Path, err)
 			continue
 		}
-		if copied, err := os.Stat(dest); err == nil {
+		runsDest := filepath.Join(runsDir, name)
+		if err := copyFile(workDest, runsDest); err != nil {
+			s.appendLog(j, "\nCould not mirror generated image %s: %v\n", workDest, err)
+			continue
+		}
+		if copied, err := os.Stat(runsDest); err == nil {
 			out = append(out, imageInfo{
 				Name: name,
-				URL:  "/runs/" + j.ID + "/" + name,
+				URL:  "/runs/" + runsRelDir + "/" + url.PathEscape(name),
 				Size: copied.Size(),
 			})
 		}
@@ -1001,6 +1012,11 @@ func userWorkDirKey(email string) string {
 	return prefix + "-" + hex.EncodeToString(sum[:])[:16]
 }
 
+func publicUserKey(userKey string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(userKey)))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
 func newAuditEvent(r *http.Request, j *job) auditEvent {
 	email := accessEmail(r)
 
@@ -1095,6 +1111,9 @@ func copyFile(src, dest string) error {
 	}
 	defer in.Close()
 
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return err
+	}
 	out, err := os.Create(dest)
 	if err != nil {
 		return err
