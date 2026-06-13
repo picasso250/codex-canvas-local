@@ -14,7 +14,7 @@ import (
 )
 
 func TestNewAuditEventUsesAccessHeaders(t *testing.T) {
-	req := httptest.NewRequest("POST", "/api/jobs", nil)
+	req := httptest.NewRequest("POST", "/api/work/jobs", nil)
 	req.RemoteAddr = "127.0.0.1:54321"
 	req.Header.Set("Cf-Access-Authenticated-User-Email", "user@example.com")
 	req.Header.Set("Cf-Connecting-Ip", "203.0.113.10")
@@ -26,11 +26,6 @@ func TestNewAuditEventUsesAccessHeaders(t *testing.T) {
 		Prompt:    "draw a cabin",
 		WorkDir:   filepath.Join("tmp", "sessions", "job123"),
 		CreatedAt: time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC),
-		ReferenceImages: []referenceInfo{{
-			Name: "ref.png",
-			Path: `C:\tmp\ref.png`,
-			Size: 42,
-		}},
 	}
 
 	event := newAuditEvent(req, j)
@@ -45,9 +40,6 @@ func TestNewAuditEventUsesAccessHeaders(t *testing.T) {
 	}
 	if event.CodexPrompt == "" || event.CodexArgs == nil {
 		t.Fatalf("codex execution details were not recorded")
-	}
-	if len(event.ReferenceImages) != 1 {
-		t.Fatalf("reference images = %d", len(event.ReferenceImages))
 	}
 }
 
@@ -236,9 +228,9 @@ func TestCollectImagesIncludesUpdatedPersistentFile(t *testing.T) {
 
 func TestListJobsFiltersByUser(t *testing.T) {
 	s := &server{jobs: map[string]*job{}}
-	userReq := httptest.NewRequest("GET", "/api/jobs", nil)
+	userReq := httptest.NewRequest("GET", "/api/work/jobs", nil)
 	userReq.Header.Set("Cf-Access-Authenticated-User-Email", "user@example.com")
-	otherReq := httptest.NewRequest("GET", "/api/jobs", nil)
+	otherReq := httptest.NewRequest("GET", "/api/work/jobs", nil)
 	otherReq.Header.Set("Cf-Access-Authenticated-User-Email", "other@example.com")
 
 	s.jobs["user-job"] = &job{ID: "user-job", Mode: "work", UserKey: s.userKey(userReq), Prompt: "mine", Status: "succeeded", CreatedAt: time.Now()}
@@ -313,6 +305,16 @@ func TestWorkFileUploadAndList(t *testing.T) {
 	if listRR.Code != http.StatusOK {
 		t.Fatalf("list status = %d", listRR.Code)
 	}
+	var uploadGot struct {
+		Files []fileEntry `json:"files"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &uploadGot); err != nil {
+		t.Fatal(err)
+	}
+	if len(uploadGot.Files) != 1 || uploadGot.Files[0].Path != "note.txt" {
+		t.Fatalf("uploaded files = %#v", uploadGot.Files)
+	}
+
 	var got struct {
 		Entries []fileEntry `json:"entries"`
 	}

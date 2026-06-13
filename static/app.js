@@ -21,6 +21,7 @@ let activeJobId = null;
 let pollTimer = null;
 const autoCollapsedJobs = new Set();
 const upgradeNoticeKey = "codexCanvas.upgradeNotice.gptImage2Workdir.v1";
+const previewUrls = new WeakMap();
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -38,15 +39,14 @@ form.addEventListener("submit", async (event) => {
   clearGallery();
 
   try {
-    const formData = new FormData();
-    formData.append("prompt", prompt);
-    for (const file of imageInput.files) {
-      formData.append("images", file);
-    }
+    const referenceFiles = [...imageInput.files];
+    const references = referenceFiles.length ? await uploadReferences(referenceFiles) : [];
+    const codexPrompt = buildImagePrompt(prompt, references);
 
-    const response = await fetch("/api/jobs", {
+    const response = await fetch("/api/work/jobs", {
       method: "POST",
-      body: formData,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: codexPrompt }),
     });
     if (!response.ok) throw new Error(await response.text());
     const data = await response.json();
@@ -61,6 +61,7 @@ form.addEventListener("submit", async (event) => {
 });
 
 promptInput.addEventListener("input", renderPromptMeta);
+promptInput.addEventListener("paste", handlePromptPaste);
 imageInput.addEventListener("change", renderReferenceList);
 
 refreshButton.addEventListener("click", async () => {
@@ -77,7 +78,7 @@ function startPolling(id) {
 }
 
 async function fetchJob(id) {
-  const response = await fetch(`/api/jobs/${id}`);
+  const response = await fetch(`/api/work/jobs/${id}`);
   if (!response.ok) return;
   const job = await response.json();
   renderJob(job);
@@ -91,7 +92,7 @@ async function fetchJob(id) {
 }
 
 async function loadJobs() {
-  const response = await fetch("/api/jobs");
+  const response = await fetch("/api/work/jobs");
   if (!response.ok) return;
   const jobs = await response.json();
   jobsEl.innerHTML = "";
@@ -101,8 +102,8 @@ async function loadJobs() {
     button.type = "button";
     button.innerHTML = `
       <span class="job-status ${job.status}">${jobStatusText(job.status)}</span>
-      <span class="job-prompt">${escapeHTML(job.prompt)}</span>
-      <span class="job-time">${new Date(job.createdAt).toLocaleString()}${referenceSuffix(job)}</span>
+      <span class="job-prompt">${escapeHTML(displayPrompt(job.prompt))}</span>
+      <span class="job-time">${new Date(job.createdAt).toLocaleString()}</span>
     `;
     button.addEventListener("click", () => {
       activeJobId = job.id;
@@ -202,17 +203,86 @@ function renderReferenceList() {
 
   referenceList.classList.add("has-files");
   referenceList.innerHTML = files
-    .map((file, index) => `<span>${index + 1}. ${escapeHTML(file.name)}</span>`)
+    .map(
+      (file, index) => `
+        <figure class="reference-thumb">
+          <img src="${escapeAttr(previewURL(file))}" alt="${escapeHTML(file.name)}">
+          <figcaption>${index + 1}. ${escapeHTML(file.name)}</figcaption>
+        </figure>
+      `,
+    )
     .join("");
+}
+
+function previewURL(file) {
+  if (!previewUrls.has(file)) previewUrls.set(file, URL.createObjectURL(file));
+  return previewUrls.get(file);
+}
+
+function handlePromptPaste(event) {
+  const pastedImages = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith("image/"));
+  if (!pastedImages.length) return;
+
+  event.preventDefault();
+  appendReferenceFiles(pastedImages);
+  renderReferenceList();
+  setStatus(`已粘贴 ${pastedImages.length} 张图`, "ok");
+}
+
+function appendReferenceFiles(files) {
+  const dataTransfer = new DataTransfer();
+  for (const file of imageInput.files) dataTransfer.items.add(file);
+  for (const file of files) dataTransfer.items.add(namedPastedImage(file));
+  imageInput.files = dataTransfer.files;
+}
+
+function namedPastedImage(file) {
+  if (file.name && file.name !== "image.png") return file;
+  const ext = imageExtension(file.type);
+  return new File([file], `pasted-${Date.now()}-${Math.random().toString(36).slice(2, 7)}${ext}`, {
+    type: file.type,
+    lastModified: file.lastModified || Date.now(),
+  });
+}
+
+function imageExtension(type) {
+  if (type === "image/jpeg") return ".jpg";
+  if (type === "image/webp") return ".webp";
+  if (type === "image/gif") return ".gif";
+  return ".png";
 }
 
 function renderPromptMeta() {
   promptMeta.textContent = `${promptInput.value.trim().length} 字`;
 }
 
-function referenceSuffix(job) {
-  const count = (job.referenceImages || []).length;
-  return count ? ` · ${count} 张参考图` : "";
+async function uploadReferences(files) {
+  setStatus("上传参考图", "busy");
+  const path = `uploads/${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const formData = new FormData();
+  for (const file of files) formData.append("files", file);
+
+  const response = await fetch(`/api/work/files/upload?path=${encodeURIComponent(path)}`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!response.ok) throw new Error(await response.text());
+
+  const data = await response.json();
+  return data.files || [];
+}
+
+function buildImagePrompt(prompt, references) {
+  if (!references.length) return `use skill $imagegen : ${prompt}`;
+  const refText = references.map((file, index) => `${index + 1}. ${file.path}`).join(" ");
+  return `you have ${refText} ; use skill $imagegen : ${prompt}`;
+}
+
+function displayPrompt(prompt) {
+  const marker = "use skill $imagegen :";
+  const index = String(prompt || "").indexOf(marker);
+  if (index === -1) return prompt;
+  return String(prompt).slice(index + marker.length).trim();
 }
 
 function jobStatusText(status) {
@@ -230,6 +300,10 @@ function escapeHTML(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function escapeAttr(value) {
+  return escapeHTML(value);
 }
 
 function showUpgradeNotice() {

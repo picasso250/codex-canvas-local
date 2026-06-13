@@ -51,47 +51,39 @@ type server struct {
 }
 
 type job struct {
-	ID              string          `json:"id"`
-	Mode            string          `json:"mode"`
-	UserKey         string          `json:"-"`
-	Prompt          string          `json:"prompt"`
-	WorkDir         string          `json:"workDir"`
-	Status          string          `json:"status"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	StartedAt       *time.Time      `json:"startedAt,omitempty"`
-	FinishedAt      *time.Time      `json:"finishedAt,omitempty"`
-	Log             string          `json:"log"`
-	Error           string          `json:"error,omitempty"`
-	Images          []imageInfo     `json:"images"`
-	ReferenceImages []referenceInfo `json:"referenceImages"`
+	ID         string      `json:"id"`
+	Mode       string      `json:"mode"`
+	UserKey    string      `json:"-"`
+	Prompt     string      `json:"prompt"`
+	WorkDir    string      `json:"workDir"`
+	Status     string      `json:"status"`
+	CreatedAt  time.Time   `json:"createdAt"`
+	StartedAt  *time.Time  `json:"startedAt,omitempty"`
+	FinishedAt *time.Time  `json:"finishedAt,omitempty"`
+	Log        string      `json:"log"`
+	Error      string      `json:"error,omitempty"`
+	Images     []imageInfo `json:"images"`
 
 	mu sync.Mutex
 }
 
 type jobView struct {
-	ID              string          `json:"id"`
-	Mode            string          `json:"mode"`
-	Prompt          string          `json:"prompt"`
-	WorkDir         string          `json:"workDir"`
-	Status          string          `json:"status"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	StartedAt       *time.Time      `json:"startedAt,omitempty"`
-	FinishedAt      *time.Time      `json:"finishedAt,omitempty"`
-	Log             string          `json:"log"`
-	Error           string          `json:"error,omitempty"`
-	Images          []imageInfo     `json:"images"`
-	ReferenceImages []referenceInfo `json:"referenceImages"`
+	ID         string      `json:"id"`
+	Mode       string      `json:"mode"`
+	Prompt     string      `json:"prompt"`
+	WorkDir    string      `json:"workDir"`
+	Status     string      `json:"status"`
+	CreatedAt  time.Time   `json:"createdAt"`
+	StartedAt  *time.Time  `json:"startedAt,omitempty"`
+	FinishedAt *time.Time  `json:"finishedAt,omitempty"`
+	Log        string      `json:"log"`
+	Error      string      `json:"error,omitempty"`
+	Images     []imageInfo `json:"images"`
 }
 
 type imageInfo struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
-	Size int64  `json:"size"`
-}
-
-type referenceInfo struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
 	Size int64  `json:"size"`
 }
 
@@ -111,19 +103,18 @@ type fileEntry struct {
 }
 
 type auditEvent struct {
-	Event           string          `json:"event"`
-	JobID           string          `json:"jobId"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	Email           string          `json:"email,omitempty"`
-	IP              string          `json:"ip,omitempty"`
-	RemoteAddr      string          `json:"remoteAddr,omitempty"`
-	UserAgent       string          `json:"userAgent,omitempty"`
-	CFRay           string          `json:"cfRay,omitempty"`
-	Prompt          string          `json:"prompt"`
-	CodexArgs       []string        `json:"codexArgs"`
-	CodexPrompt     string          `json:"codexPrompt"`
-	WorkDir         string          `json:"workDir"`
-	ReferenceImages []referenceInfo `json:"referenceImages,omitempty"`
+	Event       string    `json:"event"`
+	JobID       string    `json:"jobId"`
+	CreatedAt   time.Time `json:"createdAt"`
+	Email       string    `json:"email,omitempty"`
+	IP          string    `json:"ip,omitempty"`
+	RemoteAddr  string    `json:"remoteAddr,omitempty"`
+	UserAgent   string    `json:"userAgent,omitempty"`
+	CFRay       string    `json:"cfRay,omitempty"`
+	Prompt      string    `json:"prompt"`
+	CodexArgs   []string  `json:"codexArgs"`
+	CodexPrompt string    `json:"codexPrompt"`
+	WorkDir     string    `json:"workDir"`
 }
 
 type auditLine struct {
@@ -175,8 +166,6 @@ func main() {
 	mux.Handle("/", staticHandler(staticRoot, staticVersion))
 	mux.Handle("/runs/", http.StripPrefix("/runs/", http.FileServer(http.Dir(filepath.Join(root, "runs")))))
 	mux.HandleFunc("/api/audit", app.handleAudit)
-	mux.HandleFunc("/api/jobs", app.handleJobs)
-	mux.HandleFunc("/api/jobs/", app.handleJob)
 	mux.HandleFunc("/api/work/jobs", app.handleWorkJobs)
 	mux.HandleFunc("/api/work/jobs/", app.handleWorkJob)
 	mux.HandleFunc("/api/work/files", app.handleWorkFiles)
@@ -281,77 +270,6 @@ func isWorkHost(host string) bool {
 	return host == "codex.io99.xyz"
 }
 
-func (s *server) handleJobs(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodPost:
-		s.createJob(w, r)
-	case http.MethodGet:
-		s.listJobs(w, r)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func (s *server) createJob(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBody)
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		http.Error(w, "invalid multipart form", http.StatusBadRequest)
-		return
-	}
-
-	prompt := strings.TrimSpace(r.FormValue("prompt"))
-	if prompt == "" {
-		http.Error(w, "prompt is required", http.StatusBadRequest)
-		return
-	}
-	if len(prompt) > maxPrompt {
-		http.Error(w, fmt.Sprintf("prompt is too long; max %d bytes", maxPrompt), http.StatusBadRequest)
-		return
-	}
-
-	id, err := newID()
-	if err != nil {
-		http.Error(w, "could not create job id", http.StatusInternalServerError)
-		return
-	}
-
-	workDir := s.userWorkDir(r)
-	uploadsDir := filepath.Join(workDir, "uploads", id)
-	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
-		http.Error(w, "could not create session directory", http.StatusInternalServerError)
-		return
-	}
-
-	refs, err := s.saveReferenceImages(r, uploadsDir)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	j := &job{
-		ID:              id,
-		Mode:            "pic",
-		UserKey:         s.userKey(r),
-		Prompt:          prompt,
-		WorkDir:         workDir,
-		Status:          "queued",
-		CreatedAt:       time.Now(),
-		ReferenceImages: refs,
-	}
-
-	if err := s.writeAuditEvent(newAuditEvent(r, j)); err != nil {
-		http.Error(w, "could not write audit log", http.StatusInternalServerError)
-		return
-	}
-
-	s.mu.Lock()
-	s.jobs[id] = j
-	s.mu.Unlock()
-
-	go s.runJob(j)
-	writeJSON(w, http.StatusAccepted, createJobResponse{ID: id})
-}
-
 func (s *server) listJobs(w http.ResponseWriter, r *http.Request) {
 	userKey := s.userKey(r)
 	s.mu.RLock()
@@ -368,29 +286,6 @@ func (s *server) listJobs(w http.ResponseWriter, r *http.Request) {
 		return jobs[i].CreatedAt.After(jobs[k].CreatedAt)
 	})
 	writeJSON(w, http.StatusOK, jobs)
-}
-
-func (s *server) handleJob(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	id := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
-	if id == "" || strings.Contains(id, "/") {
-		http.NotFound(w, r)
-		return
-	}
-
-	s.mu.RLock()
-	j := s.jobs[id]
-	s.mu.RUnlock()
-	if j == nil || j.UserKey != s.userKey(r) {
-		http.NotFound(w, r)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, j.snapshot())
 }
 
 func (s *server) handleWorkJobs(w http.ResponseWriter, r *http.Request) {
@@ -577,12 +472,6 @@ func (s *server) runJob(j *job) {
 	arg := buildCodexPrompt(j)
 	args := buildCodexArgs()
 	s.appendLog(j, "Session workdir: %s\n", j.WorkDir)
-	if len(j.ReferenceImages) > 0 {
-		s.appendLog(j, "Reference images:\n")
-		for i, ref := range j.ReferenceImages {
-			s.appendLog(j, "  %d. %s\n", i+1, ref.Path)
-		}
-	}
 	s.appendLog(j, "Running: codex %s\n", quoteArgs(args))
 	s.appendLog(j, "Prompt via stdin:\n%s\n\n", arg)
 
@@ -645,60 +534,6 @@ func streamPipe(wg *sync.WaitGroup, r io.Reader, appendLine func(string)) {
 	for scanner.Scan() {
 		appendLine(scanner.Text())
 	}
-}
-
-func (s *server) saveReferenceImages(r *http.Request, uploadsDir string) ([]referenceInfo, error) {
-	if r.MultipartForm == nil || r.MultipartForm.File == nil {
-		return nil, nil
-	}
-
-	files := r.MultipartForm.File["images"]
-	if len(files) == 0 {
-		return nil, nil
-	}
-
-	refs := make([]referenceInfo, 0, len(files))
-	seen := map[string]int{}
-	for _, header := range files {
-		ext := strings.ToLower(filepath.Ext(header.Filename))
-		if !imageExts[ext] {
-			return nil, fmt.Errorf("unsupported reference image type: %s", header.Filename)
-		}
-
-		name := sanitizeFileName(header.Filename)
-		if name == "" {
-			name = "reference" + ext
-		}
-		name = uniqueName(name, seen)
-		dest := filepath.Join(uploadsDir, name)
-
-		src, err := header.Open()
-		if err != nil {
-			return nil, fmt.Errorf("open reference image %s: %w", header.Filename, err)
-		}
-		err = writeUploadedFile(src, dest)
-		if closeErr := src.Close(); closeErr != nil && err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			return nil, fmt.Errorf("save reference image %s: %w", header.Filename, err)
-		}
-
-		abs, err := filepath.Abs(dest)
-		if err != nil {
-			return nil, fmt.Errorf("resolve reference image path: %w", err)
-		}
-		info, err := os.Stat(abs)
-		if err != nil {
-			return nil, fmt.Errorf("stat reference image: %w", err)
-		}
-		refs = append(refs, referenceInfo{
-			Name: name,
-			Path: abs,
-			Size: info.Size(),
-		})
-	}
-	return refs, nil
 }
 
 func (s *server) handleWorkFiles(w http.ResponseWriter, r *http.Request) {
@@ -803,6 +638,7 @@ func (s *server) handleWorkFileUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seen := map[string]int{}
+	saved := make([]fileEntry, 0, len(files))
 	for _, header := range files {
 		name := sanitizeFileName(header.Filename)
 		if name == "" {
@@ -828,8 +664,36 @@ func (s *server) handleWorkFileUpload(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "could not save upload", http.StatusInternalServerError)
 			return
 		}
+		info, err := os.Stat(dest)
+		if err != nil {
+			http.Error(w, "could not stat upload", http.StatusInternalServerError)
+			return
+		}
+		rel, err := filepath.Rel(root, dest)
+		if err != nil {
+			http.Error(w, "could not resolve upload", http.StatusInternalServerError)
+			return
+		}
+		rel = filepath.ToSlash(rel)
+		ext := strings.ToLower(filepath.Ext(name))
+		item := fileEntry{
+			Name:    name,
+			Path:    rel,
+			IsDir:   false,
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+			IsImage: imageExts[ext],
+		}
+		item.DownloadURL = "/api/work/files/download?path=" + urlQueryEscape(rel)
+		if item.IsImage {
+			item.PreviewURL = "/api/work/files/preview?path=" + urlQueryEscape(rel)
+		}
+		saved = append(saved, item)
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusCreated, struct {
+		Status string      `json:"status"`
+		Files  []fileEntry `json:"files"`
+	}{Status: "ok", Files: saved})
 }
 
 func (s *server) handleWorkFileDownload(w http.ResponseWriter, r *http.Request) {
@@ -902,24 +766,7 @@ func buildCodexArgs() []string {
 }
 
 func buildCodexPrompt(j *job) string {
-	if j.Mode == "work" {
-		return j.Prompt
-	}
-	if len(j.ReferenceImages) == 0 {
-		return "use skill $imagegen : " + j.Prompt
-	}
-
-	var b strings.Builder
-	b.WriteString("you have ")
-	for i, ref := range j.ReferenceImages {
-		if i > 0 {
-			b.WriteString(" ")
-		}
-		b.WriteString(fmt.Sprintf("%d. %s", i+1, ref.Path))
-	}
-	b.WriteString(" ; use skill $imagegen : ")
-	b.WriteString(j.Prompt)
-	return b.String()
+	return j.Prompt
 }
 
 func (s *server) collectImages(j *job, before map[string]time.Time, started time.Time) []imageInfo {
@@ -1092,18 +939,17 @@ func (j *job) snapshot() jobView {
 	defer j.mu.Unlock()
 
 	return jobView{
-		ID:              j.ID,
-		Mode:            j.Mode,
-		Prompt:          j.Prompt,
-		WorkDir:         j.WorkDir,
-		Status:          j.Status,
-		CreatedAt:       j.CreatedAt,
-		StartedAt:       j.StartedAt,
-		FinishedAt:      j.FinishedAt,
-		Log:             j.Log,
-		Error:           j.Error,
-		Images:          append([]imageInfo(nil), j.Images...),
-		ReferenceImages: append([]referenceInfo(nil), j.ReferenceImages...),
+		ID:         j.ID,
+		Mode:       j.Mode,
+		Prompt:     j.Prompt,
+		WorkDir:    j.WorkDir,
+		Status:     j.Status,
+		CreatedAt:  j.CreatedAt,
+		StartedAt:  j.StartedAt,
+		FinishedAt: j.FinishedAt,
+		Log:        j.Log,
+		Error:      j.Error,
+		Images:     append([]imageInfo(nil), j.Images...),
 	}
 }
 
@@ -1159,19 +1005,18 @@ func newAuditEvent(r *http.Request, j *job) auditEvent {
 	email := accessEmail(r)
 
 	return auditEvent{
-		Event:           "job_created",
-		JobID:           j.ID,
-		CreatedAt:       j.CreatedAt,
-		Email:           email,
-		IP:              clientIP(r),
-		RemoteAddr:      r.RemoteAddr,
-		UserAgent:       strings.TrimSpace(r.UserAgent()),
-		CFRay:           strings.TrimSpace(r.Header.Get("Cf-Ray")),
-		Prompt:          j.Prompt,
-		CodexArgs:       buildCodexArgs(),
-		CodexPrompt:     buildCodexPrompt(j),
-		WorkDir:         j.WorkDir,
-		ReferenceImages: append([]referenceInfo(nil), j.ReferenceImages...),
+		Event:       "job_created",
+		JobID:       j.ID,
+		CreatedAt:   j.CreatedAt,
+		Email:       email,
+		IP:          clientIP(r),
+		RemoteAddr:  r.RemoteAddr,
+		UserAgent:   strings.TrimSpace(r.UserAgent()),
+		CFRay:       strings.TrimSpace(r.Header.Get("Cf-Ray")),
+		Prompt:      j.Prompt,
+		CodexArgs:   buildCodexArgs(),
+		CodexPrompt: buildCodexPrompt(j),
+		WorkDir:     j.WorkDir,
 	}
 }
 

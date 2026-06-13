@@ -26,9 +26,9 @@ function Get-CanvasProcess([string]$ResolvedExePath) {
 
 function Get-ActiveJobs([string]$BaseUrl) {
     try {
-        $jobs = Invoke-RestMethod -Uri "$BaseUrl/api/jobs" -Method Get -TimeoutSec 5
+        $jobs = Invoke-RestMethod -Uri "$BaseUrl/api/work/jobs" -Method Get -TimeoutSec 5
     } catch {
-        Write-Warning "Could not read $BaseUrl/api/jobs: $($_.Exception.Message)"
+        Write-Warning "Could not read $BaseUrl/api/work/jobs: $($_.Exception.Message)"
         return @()
     }
 
