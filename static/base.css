@@ -197,7 +197,8 @@ button.secondary:hover {
 
 .nav-chip,
 .command-chip,
-.model-chip {
+.model-chip,
+.usage-chip {
   display: none;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -217,6 +218,31 @@ button.secondary:hover {
   color: var(--accent);
   border-color: rgba(79, 126, 255, 0.30);
   background: var(--accent-soft);
+}
+
+.usage-chip {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-chip.busy {
+  color: var(--accent);
+  border-color: rgba(79, 126, 255, 0.30);
+  background: var(--accent-soft);
+}
+
+.usage-chip.ok {
+  color: var(--ok);
+  border-color: rgba(45, 157, 110, 0.30);
+  background: rgba(45, 157, 110, 0.08);
+}
+
+.usage-chip.warn {
+  color: var(--warn);
+  border-color: rgba(212, 156, 26, 0.30);
+  background: rgba(212, 156, 26, 0.08);
 }
 
 .nav-chip {

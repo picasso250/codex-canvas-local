@@ -16,6 +16,7 @@ const imageCount = document.querySelector("#imageCount");
 const jobsEl = document.querySelector("#jobs");
 const upgradeModal = document.querySelector("#upgradeModal");
 const upgradeDismiss = document.querySelector("#upgradeDismiss");
+const usageLimits = document.querySelector("#usageLimits");
 
 let activeJobId = null;
 let pollTimer = null;
@@ -306,6 +307,58 @@ function escapeAttr(value) {
   return escapeHTML(value);
 }
 
+async function loadUsageLimits() {
+  if (!usageLimits) return;
+  usageLimits.textContent = "限额读取中";
+  usageLimits.className = "usage-chip busy";
+  try {
+    const response = await fetch("/api/usage-limits");
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    if (!result.ok) throw new Error(result.error || "读取失败");
+    usageLimits.textContent = formatUsageLimits(result.data);
+    usageLimits.title = formatUsageLimitsTitle(result);
+    usageLimits.className = "usage-chip ok";
+  } catch (error) {
+    usageLimits.textContent = "限额不可用";
+    usageLimits.title = error.message;
+    usageLimits.className = "usage-chip warn";
+  }
+}
+
+function formatUsageLimits(data) {
+  const limits = Array.isArray(data?.limits) ? data.limits : [];
+  const parts = limits
+    .filter((limit) => Number.isFinite(limit.remaining_percent))
+    .map((limit) => {
+      const reset = limit.reset_time ? ` ${limit.reset_time}` : "";
+      return `${shortLimitName(limit.name)} ${limit.remaining_percent}%${reset}`;
+    });
+  return parts.length ? parts.join(" · ") : "限额未知";
+}
+
+function formatUsageLimitsTitle(result) {
+  const data = result.data || {};
+  const lines = Array.isArray(data.limits)
+    ? data.limits.map((limit) => {
+        const reset = limit.reset_time ? `，重置：${limit.reset_time}` : "";
+        return `${limit.name}: ${limit.remaining_percent}%${reset}`;
+      })
+    : [];
+  if (Number.isFinite(data.credit_balance)) lines.push(`剩余额度: ${data.credit_balance}`);
+  if (Number.isFinite(data.turns)) lines.push(`Turns: ${data.turns}`);
+  if (result.updatedAt) lines.push(`更新: ${new Date(result.updatedAt).toLocaleString()}`);
+  return lines.join("\n");
+}
+
+function shortLimitName(name) {
+  return String(name || "限额")
+    .replace("使用限额", "")
+    .replace("5 小时", "5小时")
+    .replace("GPT-", "G")
+    .trim();
+}
+
 function showUpgradeNotice() {
   if (!upgradeModal || localStorage.getItem(upgradeNoticeKey) === "dismissed") return;
   upgradeModal.hidden = false;
@@ -320,6 +373,7 @@ function dismissUpgradeNotice() {
 }
 
 loadJobs();
+loadUsageLimits();
 renderReferenceList();
 renderPromptMeta();
 showUpgradeNotice();

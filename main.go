@@ -50,6 +50,9 @@ type server struct {
 	jobs      map[string]*job
 	mu        sync.RWMutex
 	auditMu   sync.Mutex
+	usageMu   sync.Mutex
+	usage     usageLimitsResponse
+	usageRun  bool
 	sem       chan struct{}
 }
 
@@ -133,6 +136,13 @@ type auditResponse struct {
 	Lines  []auditLine `json:"lines"`
 }
 
+type usageLimitsResponse struct {
+	OK        bool            `json:"ok"`
+	UpdatedAt *time.Time      `json:"updatedAt,omitempty"`
+	Data      json.RawMessage `json:"data,omitempty"`
+	Error     string          `json:"error,omitempty"`
+}
+
 func main() {
 	cfg := parseConfig()
 
@@ -170,6 +180,7 @@ func main() {
 	mux.Handle("/", staticHandler(staticRoot, staticVersion))
 	mux.Handle("/runs/", http.StripPrefix("/runs/", http.FileServer(http.Dir(filepath.Join(root, "runs")))))
 	mux.HandleFunc("/api/audit", app.handleAudit)
+	mux.HandleFunc("/api/usage-limits", app.handleUsageLimits)
 	mux.HandleFunc("/api/work/jobs", app.handleWorkJobs)
 	mux.HandleFunc("/api/work/jobs/", app.handleWorkJob)
 	mux.HandleFunc("/api/work/files", app.handleWorkFiles)
@@ -198,7 +209,22 @@ func parseConfig() config {
 
 func mustStaticVersion() string {
 	h := sha256.New()
-	for _, name := range []string{"static/index.html", "static/work.html", "static/audit.html", "static/app.js", "static/work.js", "static/audit.js", "static/styles.css"} {
+	for _, name := range []string{
+		"static/index.html",
+		"static/work.html",
+		"static/audit.html",
+		"static/app.js",
+		"static/work.js",
+		"static/audit.js",
+		"static/styles.css",
+		"static/base.css",
+		"static/layout.css",
+		"static/forms.css",
+		"static/panels.css",
+		"static/files.css",
+		"static/logs.css",
+		"static/responsive.css",
+	} {
 		b, err := staticFiles.ReadFile(name)
 		if err != nil {
 			log.Fatal(err)
@@ -348,6 +374,65 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *server) handleUsageLimits(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	resp := s.refreshUsageLimits()
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *server) refreshUsageLimits() usageLimitsResponse {
+	s.usageMu.Lock()
+	if s.usageRun {
+		resp := s.usage
+		if !resp.OK && resp.Error == "" {
+			resp.Error = "usage limit refresh already running"
+		}
+		s.usageMu.Unlock()
+		return resp
+	}
+	s.usageRun = true
+	s.usageMu.Unlock()
+
+	resp := s.readUsageLimits()
+
+	s.usageMu.Lock()
+	s.usage = resp
+	s.usageRun = false
+	s.usageMu.Unlock()
+	return resp
+}
+
+func (s *server) readUsageLimits() usageLimitsResponse {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	script := filepath.Join(s.root, "scripts", "codex_usage_limits.py")
+	cmd := exec.CommandContext(ctx, "python", script, "--json")
+	cmd.Dir = s.root
+	out, err := cmd.CombinedOutput()
+	now := time.Now()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return usageLimitsResponse{OK: false, UpdatedAt: &now, Error: "codex usage limit script timed out"}
+	}
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return usageLimitsResponse{OK: false, UpdatedAt: &now, Error: msg}
+	}
+
+	var raw json.RawMessage
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return usageLimitsResponse{OK: false, UpdatedAt: &now, Error: "invalid usage limit json: " + err.Error()}
+	}
+	return usageLimitsResponse{OK: true, UpdatedAt: &now, Data: raw}
+}
+
 func (s *server) readAudit() (auditResponse, error) {
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
@@ -464,6 +549,9 @@ func (s *server) createWorkJob(w http.ResponseWriter, r *http.Request) {
 func (s *server) runJob(j *job) {
 	exitCode := -1
 	defer func() {
+		if exitCode != 0 {
+			go s.refreshUsageLimits()
+		}
 		s.notifyJobFinished(j, exitCode)
 	}()
 

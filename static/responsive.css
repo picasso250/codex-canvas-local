@@ -19,7 +19,8 @@
 
   .nav-chip,
   .command-chip,
-  .model-chip {
+  .model-chip,
+  .usage-chip {
     display: block;
   }
 
