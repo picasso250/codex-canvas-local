@@ -76,6 +76,97 @@ func TestWriteAuditEventAppendsJSONLine(t *testing.T) {
 	}
 }
 
+func TestHandleAuditAllowsLocalUser(t *testing.T) {
+	dir := t.TempDir()
+	s := &server{auditPath: filepath.Join(dir, "audit.jsonl")}
+	if err := s.writeAuditEvent(auditEvent{
+		Event:     "job_created",
+		JobID:     "job123",
+		CreatedAt: time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC),
+		Prompt:    "draw a cabin",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/audit", nil)
+	rr := httptest.NewRecorder()
+	s.handleAudit(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got auditResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Lines) != 1 || got.Lines[0].Event == nil || got.Lines[0].Event.JobID != "job123" {
+		t.Fatalf("audit response = %#v", got)
+	}
+	if len(got.Emails) != 1 || got.Emails[0] != "local" {
+		t.Fatalf("emails = %#v", got.Emails)
+	}
+}
+
+func TestHandleAuditReturnsEmailSet(t *testing.T) {
+	dir := t.TempDir()
+	s := &server{auditPath: filepath.Join(dir, "audit.jsonl")}
+	for _, event := range []auditEvent{
+		{Event: "job_created", JobID: "job-user", Email: "user@example.com", CreatedAt: time.Now()},
+		{Event: "job_created", JobID: "job-other", Email: "other@example.com", CreatedAt: time.Now()},
+		{Event: "job_created", JobID: "job-local", CreatedAt: time.Now()},
+	} {
+		if err := s.writeAuditEvent(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/api/audit", nil)
+	rr := httptest.NewRecorder()
+	s.handleAudit(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got auditResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	wantEmails := []string{"local", "other@example.com", "user@example.com"}
+	if strings.Join(got.Emails, ",") != strings.Join(wantEmails, ",") {
+		t.Fatalf("emails = %#v", got.Emails)
+	}
+	if len(got.Lines) != 3 {
+		t.Fatalf("lines = %#v", got.Lines)
+	}
+}
+
+func TestHandleAuditRejectsAccessUser(t *testing.T) {
+	s := &server{auditPath: filepath.Join(t.TempDir(), "audit.jsonl")}
+	req := httptest.NewRequest("GET", "/api/audit", nil)
+	req.Header.Set("Cf-Access-Authenticated-User-Email", "user@example.com")
+	rr := httptest.NewRecorder()
+
+	s.handleAudit(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d", rr.Code)
+	}
+}
+
+func TestHandleAuditPageRejectsAccessUser(t *testing.T) {
+	s := &server{}
+	handler := s.handleAuditPage(os.DirFS("static"), "test")
+	req := httptest.NewRequest("GET", "/audit.html", nil)
+	req.Header.Set("Cf-Access-Authenticated-User-Email", "user@example.com")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d", rr.Code)
+	}
+}
+
 func TestUserWorkDirKey(t *testing.T) {
 	if got := userWorkDirKey(""); got != "local" {
 		t.Fatalf("empty user key = %q", got)

@@ -126,6 +126,18 @@ type auditEvent struct {
 	ReferenceImages []referenceInfo `json:"referenceImages,omitempty"`
 }
 
+type auditLine struct {
+	Line  int         `json:"line"`
+	Event *auditEvent `json:"event,omitempty"`
+	Error string      `json:"error,omitempty"`
+	Raw   string      `json:"raw,omitempty"`
+}
+
+type auditResponse struct {
+	Emails []string    `json:"emails"`
+	Lines  []auditLine `json:"lines"`
+}
+
 func main() {
 	cfg := parseConfig()
 
@@ -157,8 +169,12 @@ func main() {
 	staticVersion := mustStaticVersion()
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/audit", app.handleAuditPage(staticRoot, staticVersion))
+	mux.HandleFunc("/audit/", app.handleAuditPage(staticRoot, staticVersion))
+	mux.HandleFunc("/audit.html", app.handleAuditPage(staticRoot, staticVersion))
 	mux.Handle("/", staticHandler(staticRoot, staticVersion))
 	mux.Handle("/runs/", http.StripPrefix("/runs/", http.FileServer(http.Dir(filepath.Join(root, "runs")))))
+	mux.HandleFunc("/api/audit", app.handleAudit)
 	mux.HandleFunc("/api/jobs", app.handleJobs)
 	mux.HandleFunc("/api/jobs/", app.handleJob)
 	mux.HandleFunc("/api/work/jobs", app.handleWorkJobs)
@@ -189,7 +205,7 @@ func parseConfig() config {
 
 func mustStaticVersion() string {
 	h := sha256.New()
-	for _, name := range []string{"static/index.html", "static/work.html", "static/app.js", "static/work.js", "static/styles.css"} {
+	for _, name := range []string{"static/index.html", "static/work.html", "static/audit.html", "static/app.js", "static/work.js", "static/audit.js", "static/styles.css"} {
 		b, err := staticFiles.ReadFile(name)
 		if err != nil {
 			log.Fatal(err)
@@ -197,6 +213,34 @@ func mustStaticVersion() string {
 		h.Write(b)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:12]
+}
+
+func (s *server) handleAuditPage(root fs.FS, version string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if r.URL.Path != "/audit" && r.URL.Path != "/audit/" && r.URL.Path != "/audit.html" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !isLocalUser(r) {
+			http.Error(w, "permission denied", http.StatusForbidden)
+			return
+		}
+
+		b, err := fs.ReadFile(root, "audit.html")
+		if err != nil {
+			http.Error(w, "audit page not found", http.StatusInternalServerError)
+			return
+		}
+		html := strings.ReplaceAll(string(b), `href="/styles.css"`, `href="/styles.css?v=`+version+`"`)
+		html = strings.ReplaceAll(html, `src="/audit.js"`, `src="/audit.js?v=`+version+`"`)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, html)
+	}
 }
 
 func staticHandler(root fs.FS, version string) http.Handler {
@@ -381,6 +425,78 @@ func (s *server) handleWorkJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, j.snapshot())
+}
+
+func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !isLocalUser(r) {
+		http.Error(w, "permission denied", http.StatusForbidden)
+		return
+	}
+
+	resp, err := s.readAudit()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeJSON(w, http.StatusOK, auditResponse{})
+			return
+		}
+		http.Error(w, "could not read audit log", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *server) readAudit() (auditResponse, error) {
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+
+	f, err := os.Open(s.auditPath)
+	if err != nil {
+		return auditResponse{}, err
+	}
+	defer f.Close()
+
+	var lines []auditLine
+	emailSet := map[string]bool{}
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 4*1024*1024)
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		raw := strings.TrimSpace(scanner.Text())
+		if raw == "" {
+			continue
+		}
+
+		var event auditEvent
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			lines = append(lines, auditLine{Line: lineNo, Error: err.Error(), Raw: raw})
+			continue
+		}
+		email := strings.TrimSpace(event.Email)
+		if email == "" {
+			email = "local"
+		}
+		emailSet[email] = true
+		lines = append(lines, auditLine{Line: lineNo, Event: &event})
+	}
+	if err := scanner.Err(); err != nil {
+		return auditResponse{}, err
+	}
+
+	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+		lines[i], lines[j] = lines[j], lines[i]
+	}
+	emails := make([]string, 0, len(emailSet))
+	for email := range emailSet {
+		emails = append(emails, email)
+	}
+	sort.Strings(emails)
+	return auditResponse{Emails: emails, Lines: lines}, nil
 }
 
 func (s *server) createWorkJob(w http.ResponseWriter, r *http.Request) {
@@ -1065,6 +1181,10 @@ func accessEmail(r *http.Request) string {
 		"CF-Access-Authenticated-User-Email",
 		"X-Forwarded-Email",
 	)
+}
+
+func isLocalUser(r *http.Request) bool {
+	return accessEmail(r) == ""
 }
 
 func (s *server) writeAuditEvent(event auditEvent) error {

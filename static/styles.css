@@ -46,11 +46,13 @@ body {
 
 button,
 textarea,
-input {
+input,
+select {
   font: inherit;
 }
 
-input[type="text"] {
+input[type="text"],
+select {
   min-height: 42px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -83,6 +85,7 @@ button:active {
 button:focus-visible,
 textarea:focus-visible,
 input:focus-visible,
+select:focus-visible,
 summary:focus-visible,
 .upload-button:focus-visible {
   outline: 3px solid var(--focus);
@@ -119,6 +122,7 @@ button.secondary:hover,
 .topbar,
 .prompt-panel,
 .result-panel,
+.audit-panel,
 .activity,
 .history-panel {
   background: linear-gradient(180deg, rgba(24, 29, 36, 0.92), rgba(15, 18, 23, 0.95));
@@ -292,6 +296,7 @@ h2 {
 
 .prompt-panel,
 .result-panel,
+.audit-panel,
 .history-panel {
   padding: 15px;
 }
@@ -724,6 +729,120 @@ pre {
   margin-top: 14px;
 }
 
+.audit-shell {
+  max-width: 1180px;
+}
+
+.audit-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.audit-summary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.audit-filter {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  align-items: end;
+}
+
+.audit-filter label {
+  align-self: center;
+}
+
+.audit-list {
+  display: grid;
+  gap: 10px;
+}
+
+.audit-row {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.audit-row-error {
+  border-color: rgba(255, 138, 124, 0.42);
+  background: rgba(255, 138, 124, 0.07);
+}
+
+.audit-row-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  min-width: 0;
+}
+
+.audit-row-head strong,
+.audit-row-head span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-row-head strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.audit-row-head span:last-child {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.audit-grid {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 6px 10px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.audit-grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-weight: 720;
+}
+
+.audit-prompt {
+  max-height: 110px;
+  overflow: auto;
+  border: 1px solid rgba(201, 164, 93, 0.22);
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--text);
+  background: rgba(201, 164, 93, 0.045);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.audit-details summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.audit-details pre,
+.audit-row > pre {
+  margin: 8px 0 0;
+  max-height: 360px;
+}
+
 .job-item {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -900,6 +1019,10 @@ pre {
     min-width: 104px;
   }
 
+  .audit-filter {
+    grid-template-columns: auto minmax(180px, 1fr) auto auto;
+  }
+
   .gallery {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -944,6 +1067,7 @@ pre {
 
   .prompt-panel,
   .result-panel,
+.audit-panel,
   .history-panel {
     padding: 18px;
   }

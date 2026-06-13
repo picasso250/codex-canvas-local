@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Audit Local</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell audit-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div>
+            <p class="eyebrow">本地审计</p>
+            <h1>Audit Log</h1>
+          </div>
+        </div>
+        <div class="topbar-meta">
+          <a class="nav-chip" href="/">Pic</a>
+          <a class="nav-chip" href="/work">Work</a>
+          <div class="command-chip">/audit</div>
+          <div class="status-pill" id="statusPill">加载中</div>
+        </div>
+      </header>
+
+      <section class="audit-panel" aria-labelledby="auditTitle">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">data/audit.jsonl</p>
+            <h2 id="auditTitle">审计记录</h2>
+          </div>
+          <button type="button" id="refreshButton" class="icon-button" title="刷新" aria-label="刷新">↻</button>
+        </div>
+        <form id="filterForm" class="audit-filter">
+          <label for="emailFilter">用户名</label>
+          <select id="emailFilter">
+            <option value="">全部用户</option>
+          </select>
+          <button type="button" id="clearFilterButton" class="secondary">清空</button>
+        </form>
+        <div class="audit-summary" id="auditSummary">正在读取。</div>
+        <div id="auditList" class="audit-list"></div>
+      </section>
+    </main>
+
+    <script src="/audit.js"></script>
+  </body>
+</html>
