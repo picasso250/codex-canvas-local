@@ -549,9 +549,7 @@ func (s *server) createWorkJob(w http.ResponseWriter, r *http.Request) {
 func (s *server) runJob(j *job) {
 	exitCode := -1
 	defer func() {
-		if exitCode != 0 {
-			go s.refreshUsageLimits()
-		}
+		go s.refreshUsageLimits()
 		s.notifyJobFinished(j, exitCode)
 	}()
 
