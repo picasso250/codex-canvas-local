@@ -284,7 +284,7 @@ async function loadUsageLimits() {
     usageLimits.title = formatUsageLimitsTitle(result);
     usageLimits.className = "usage-chip ok";
   } catch (error) {
-    usageLimits.textContent = "限额不可用";
+    usageLimits.textContent = "限额未知";
     usageLimits.title = error.message;
     usageLimits.className = "usage-chip warn";
   }

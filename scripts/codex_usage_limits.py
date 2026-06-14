@@ -5,10 +5,14 @@ import argparse
 import json
 import re
 import sys
+import time
 from dataclasses import asdict, dataclass
+from typing import Any
+from urllib.parse import quote
+from urllib.request import Request
 from urllib.request import urlopen
 
-from playwright.sync_api import sync_playwright
+import websocket
 
 
 DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
@@ -22,35 +26,123 @@ class UsageLimit:
     reset_time: str | None
 
 
-def resolve_ws_endpoint(cdp_endpoint: str) -> str:
-    with urlopen(f"{cdp_endpoint.rstrip('/')}/json/version", timeout=5) as response:
+def fetch_json(cdp_endpoint: str, path: str, timeout: float = 5) -> Any:
+    if not path.startswith("/"):
+        path = f"/{path}"
+    request = Request(
+        f"{cdp_endpoint.rstrip('/')}{path}",
+        headers={"User-Agent": "codex-canvas-local/usage-limits"},
+    )
+    with urlopen(request, timeout=timeout) as response:
+        return json.load(response)
+
+
+def fetch_targets(cdp_endpoint: str) -> list[dict[str, Any]]:
+    payload = fetch_json(cdp_endpoint, "/json/list")
+    if not isinstance(payload, list):
+        raise RuntimeError("Unexpected CDP /json/list response")
+    return [target for target in payload if target.get("type") == "page"]
+
+
+def open_page(cdp_endpoint: str, target_url: str) -> dict[str, Any]:
+    path = f"/json/new?{quote(target_url, safe=':/?&=%')}"
+    request = Request(
+        f"{cdp_endpoint.rstrip('/')}{path}",
+        method="PUT",
+        headers={"User-Agent": "codex-canvas-local/usage-limits"},
+    )
+    with urlopen(request, timeout=10) as response:
         payload = json.load(response)
-    ws_endpoint = payload.get("webSocketDebuggerUrl")
-    if not ws_endpoint:
-        raise RuntimeError(f"Missing webSocketDebuggerUrl from {cdp_endpoint}")
-    return ws_endpoint
+    if not isinstance(payload, dict):
+        raise RuntimeError("Unexpected CDP /json/new response")
+    return payload
 
 
-def find_or_open_page(browser, target_url: str):
-    for context in browser.contexts:
-        for page in context.pages:
-            if page.url == target_url:
-                return page
+def find_or_open_target(cdp_endpoint: str, target_url: str) -> dict[str, Any]:
+    targets = fetch_targets(cdp_endpoint)
+    for target in targets:
+        if target.get("url") == target_url:
+            return target
 
-    for context in browser.contexts:
-        for page in context.pages:
-            if page.url.startswith("https://chatgpt.com/codex/cloud/settings/analytics"):
-                page.goto(target_url, wait_until="domcontentloaded")
-                page.wait_for_timeout(3500)
-                return page
+    target_prefix = "https://chatgpt.com/codex/cloud/settings/analytics"
+    for target in targets:
+        if str(target.get("url", "")).startswith(target_prefix):
+            evaluate_target(target, f"location.href = {json.dumps(target_url)}")
+            return target
 
-    if not browser.contexts:
-        raise RuntimeError("No browser contexts found in the CDP session")
+    return open_page(cdp_endpoint, target_url)
 
-    page = browser.contexts[0].new_page()
-    page.goto(target_url, wait_until="domcontentloaded")
-    page.wait_for_timeout(3500)
-    return page
+
+def evaluate_target(target: dict[str, Any], expression: str) -> Any:
+    ws_url = target.get("webSocketDebuggerUrl")
+    if not ws_url:
+        raise RuntimeError(f"Missing page webSocketDebuggerUrl for {target.get('url', '<unknown>')}")
+
+    message = {
+        "id": 1,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": expression,
+            "returnByValue": True,
+            "awaitPromise": True,
+        },
+    }
+    sock = websocket.create_connection(ws_url, timeout=15, suppress_origin=True)
+    try:
+        sock.send(json.dumps(message))
+        while True:
+            response = json.loads(sock.recv())
+            if response.get("id") != 1:
+                continue
+            if "error" in response:
+                raise RuntimeError(response["error"].get("message", "CDP evaluation failed"))
+            result = response.get("result", {}).get("result", {})
+            if "exceptionDetails" in response.get("result", {}):
+                raise RuntimeError("CDP evaluation raised an exception")
+            return result.get("value")
+    finally:
+        sock.close()
+
+
+def read_page_payload(target: dict[str, Any]) -> dict[str, Any]:
+    payload = evaluate_target(
+        target,
+        """
+        ({
+          url: location.href,
+          title: document.title,
+          text: document.body ? document.body.innerText : "",
+          readyState: document.readyState
+        })
+        """,
+    )
+    if not isinstance(payload, dict):
+        raise RuntimeError("Unexpected CDP Runtime.evaluate result")
+    return payload
+
+
+def wait_for_usage_page(target: dict[str, Any], target_url: str, timeout: float = 20) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    last_payload: dict[str, Any] | None = None
+    target_prefix = target_url.split("#", 1)[0]
+
+    while time.monotonic() < deadline:
+        payload = read_page_payload(target)
+        last_payload = payload
+        current_url = str(payload.get("url", ""))
+        text = str(payload.get("text", ""))
+        ready_state = payload.get("readyState")
+        if (
+            current_url.startswith(target_prefix)
+            and ready_state in {"interactive", "complete"}
+            and ("使用限额" in text or "Codex 分析" in text)
+        ):
+            return payload
+        time.sleep(1)
+
+    if last_payload is not None:
+        return last_payload
+    raise RuntimeError("Timed out waiting for usage page")
 
 
 def parse_limits(text: str) -> dict[str, object]:
@@ -110,19 +202,13 @@ def parse_limits(text: str) -> dict[str, object]:
 
 
 def read_usage(cdp_endpoint: str, url: str) -> dict[str, object]:
-    ws_endpoint = resolve_ws_endpoint(cdp_endpoint)
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.connect_over_cdp(ws_endpoint)
-        try:
-            page = find_or_open_page(browser, url)
-            page.wait_for_timeout(1000)
-            text = page.locator("body").inner_text(timeout=10000)
-            result = parse_limits(text)
-            result["url"] = page.url
-            result["title"] = page.title()
-            return result
-        finally:
-            browser.close()
+    target = find_or_open_target(cdp_endpoint, url)
+    payload = wait_for_usage_page(target, url)
+    text = str(payload.get("text", ""))
+    result = parse_limits(text)
+    result["url"] = payload.get("url") or target.get("url")
+    result["title"] = payload.get("title") or target.get("title")
+    return result
 
 
 def main(argv: list[str]) -> int:
