@@ -34,7 +34,7 @@ var staticFiles embed.FS
 const (
 	defaultAddr   = "127.0.0.1:8765"
 	notifyURL     = "http://127.0.0.1:8787/notify"
-	runTimeout    = 20 * time.Minute
+	runTimeout    = 60 * time.Minute
 	maxPrompt     = 12000
 	maxUploadBody = 128 << 20
 	notifyTimeout = 1500 * time.Millisecond
