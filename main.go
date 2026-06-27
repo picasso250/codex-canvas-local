@@ -111,18 +111,26 @@ type fileEntry struct {
 }
 
 type auditEvent struct {
-	Event       string    `json:"event"`
-	JobID       string    `json:"jobId"`
-	CreatedAt   time.Time `json:"createdAt"`
-	Email       string    `json:"email,omitempty"`
-	IP          string    `json:"ip,omitempty"`
-	RemoteAddr  string    `json:"remoteAddr,omitempty"`
-	UserAgent   string    `json:"userAgent,omitempty"`
-	CFRay       string    `json:"cfRay,omitempty"`
-	Prompt      string    `json:"prompt"`
-	CodexArgs   []string  `json:"codexArgs"`
-	CodexPrompt string    `json:"codexPrompt"`
-	WorkDir     string    `json:"workDir"`
+	Event            string      `json:"event"`
+	JobID            string      `json:"jobId"`
+	CreatedAt        time.Time   `json:"createdAt"`
+	FinishedAt       *time.Time  `json:"finishedAt,omitempty"`
+	Email            string      `json:"email,omitempty"`
+	IP               string      `json:"ip,omitempty"`
+	RemoteAddr       string      `json:"remoteAddr,omitempty"`
+	UserAgent        string      `json:"userAgent,omitempty"`
+	CFRay            string      `json:"cfRay,omitempty"`
+	Prompt           string      `json:"prompt"`
+	CodexArgs        []string    `json:"codexArgs"`
+	CodexPrompt      string      `json:"codexPrompt"`
+	WorkDir          string      `json:"workDir"`
+	Status           string      `json:"status,omitempty"`
+	Error            string      `json:"error,omitempty"`
+	DaemonCode       string      `json:"daemonCode,omitempty"`
+	DaemonMessage    string      `json:"daemonMessage,omitempty"`
+	DaemonRequestID  string      `json:"daemonRequestId,omitempty"`
+	DaemonCurrentURL string      `json:"daemonCurrentUrl,omitempty"`
+	Images           []imageInfo `json:"images,omitempty"`
 }
 
 type auditLine struct {
@@ -357,8 +365,6 @@ func jsonDecode(r io.Reader, v any) error {
 	return json.NewDecoder(r).Decode(v)
 }
 
-
-
 func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -489,8 +495,6 @@ func (s *server) readAudit() (auditResponse, error) {
 	sort.Strings(emails)
 	return auditResponse{Emails: emails, Lines: lines}, nil
 }
-
-
 
 func (s *server) sendNotification(title, message string, durationMs int, j *job) {
 	var body bytes.Buffer

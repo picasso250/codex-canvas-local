@@ -31,13 +31,13 @@ type picAskRequest struct {
 }
 
 type picAskResponse struct {
-	OK          bool     `json:"ok"`
-	Response    string   `json:"response"`
-	Images      []string `json:"images"`
-	CurrentURL  string   `json:"current_url"`
-	RequestID   string   `json:"request_id"`
-	Code        string   `json:"code"`
-	Message     string   `json:"message"`
+	OK         bool     `json:"ok"`
+	Response   string   `json:"response"`
+	Images     []string `json:"images"`
+	CurrentURL string   `json:"current_url"`
+	RequestID  string   `json:"request_id"`
+	Code       string   `json:"code"`
+	Message    string   `json:"message"`
 }
 
 func (s *server) handlePicJobs(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +173,9 @@ func (s *server) createPicJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) runPicJob(j *job, imagePaths []string) {
 	defer func() {
+		if err := s.writeAuditEvent(newAuditPicFinishedEvent(j)); err != nil {
+			s.appendLog(j, "Audit finish write failed: %v\n", err)
+		}
 		go s.refreshUsageLimits()
 		s.notifyPicFinished(j)
 	}()
@@ -213,6 +216,9 @@ func (s *server) runPicJob(j *job, imagePaths []string) {
 	}
 
 	if !resp.OK {
+		if err := s.writeAuditEvent(newAuditPicDaemonErrorEvent(j, resp)); err != nil {
+			s.appendLog(j, "Audit daemon error write failed: %v\n", err)
+		}
 		j.fail(fmt.Errorf("%s: %s", resp.Code, resp.Message))
 		return
 	}
@@ -369,5 +375,41 @@ func newAuditPicEvent(r *http.Request, j *job, imagePaths []string) auditEvent {
 		CodexArgs:   append([]string{"chatgpt_agent.py", "serve", "--mode", "always_new"}, imagePaths...),
 		CodexPrompt: j.Prompt,
 		WorkDir:     j.WorkDir,
+	}
+}
+
+func newAuditPicDaemonErrorEvent(j *job, resp *picAskResponse) auditEvent {
+	return auditEvent{
+		Event:            "pic_daemon_error",
+		JobID:            j.ID,
+		CreatedAt:        time.Now(),
+		Email:            j.Email,
+		Prompt:           j.Prompt,
+		CodexArgs:        []string{"chatgpt_agent.py", "serve", "--mode", "always_new"},
+		CodexPrompt:      j.Prompt,
+		WorkDir:          j.WorkDir,
+		Status:           "failed",
+		DaemonCode:       resp.Code,
+		DaemonMessage:    resp.Message,
+		DaemonRequestID:  resp.RequestID,
+		DaemonCurrentURL: resp.CurrentURL,
+	}
+}
+
+func newAuditPicFinishedEvent(j *job) auditEvent {
+	status := j.snapshot()
+	return auditEvent{
+		Event:       "pic_job_finished",
+		JobID:       status.ID,
+		CreatedAt:   status.CreatedAt,
+		FinishedAt:  status.FinishedAt,
+		Email:       j.Email,
+		Prompt:      status.Prompt,
+		CodexArgs:   []string{"chatgpt_agent.py", "serve", "--mode", "always_new"},
+		CodexPrompt: status.Prompt,
+		WorkDir:     status.WorkDir,
+		Status:      status.Status,
+		Error:       status.Error,
+		Images:      status.Images,
 	}
 }

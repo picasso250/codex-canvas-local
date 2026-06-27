@@ -194,19 +194,15 @@ class ChatGPTAgent:
         self.browser: Browser | None = None
         self.page: Page | None = None
         self.playwright_manager = None
+        self.playwright = None
         self.action_lock = asyncio.Lock()
         self.running_request_id: str | None = None
         self.last_error: dict[str, Any] | None = None
         self.started_at = time.time()
 
     async def start(self) -> None:
-        ws_endpoint = browser_ws_endpoint(self.cdp_url)
         self.playwright_manager = async_playwright()
-        playwright = await self.playwright_manager.start()
-        self.browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
-        self.page = await self.find_or_open_page()
-        await self.page.bring_to_front()
-        await stable_wait()
+        self.playwright = await self.playwright_manager.start()
         asyncio.create_task(self.worker())
 
     async def stop(self) -> None:
@@ -214,12 +210,44 @@ class ChatGPTAgent:
             await self.browser.close()
         if self.playwright_manager:
             await self.playwright_manager.stop()
+        self.playwright = None
+
+    async def reset_browser(self) -> None:
+        browser = self.browser
+        self.browser = None
+        self.page = None
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+
+    async def ensure_browser(self) -> Browser:
+        if self.browser:
+            try:
+                _ = self.browser.contexts
+                return self.browser
+            except Exception:
+                await self.reset_browser()
+
+        if not self.playwright:
+            raise AgentError("playwright_not_ready", "Playwright is not running.")
+
+        try:
+            ws_endpoint = browser_ws_endpoint(self.cdp_url)
+            self.browser = await self.playwright.chromium.connect_over_cdp(ws_endpoint)
+            return self.browser
+        except (HTTPError, URLError, OSError) as exc:
+            await self.reset_browser()
+            raise AgentError("cdp_unavailable", f"Chrome DevTools is unavailable at {self.cdp_url}: {exc}") from exc
+        except Exception:
+            await self.reset_browser()
+            raise
 
     async def find_or_open_page(self) -> Page:
-        if not self.browser:
-            raise AgentError("browser_not_ready", "Browser is not connected.")
+        browser = await self.ensure_browser()
         chatgpt_page: Page | None = None
-        for context in self.browser.contexts:
+        for context in browser.contexts:
             for page in context.pages:
                 if page.is_closed():
                     continue
@@ -230,7 +258,7 @@ class ChatGPTAgent:
         if chatgpt_page:
             return chatgpt_page
 
-        context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
+        context = browser.contexts[0] if browser.contexts else await browser.new_context()
         page = await context.new_page()
         await page.goto(self.target_url)
         await stable_wait()
@@ -246,9 +274,8 @@ class ChatGPTAgent:
         async with self.action_lock:
             self.running_request_id = "new-chat"
             try:
-                if not self.browser:
-                    raise AgentError("browser_not_ready", "Browser is not connected.")
-                context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
+                browser = await self.ensure_browser()
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
                 page = await context.new_page()
                 await page.goto(self.target_url)
                 await page.bring_to_front()
@@ -293,11 +320,28 @@ class ChatGPTAgent:
                 self.queue.task_done()
 
     async def handle_ask(self, job: Job) -> dict[str, Any]:
+        try:
+            return await self.handle_ask_once(job)
+        except Exception as exc:
+            if not self.is_browser_gone_error(exc):
+                raise
+            await self.reset_browser()
+            return await self.handle_ask_once(job)
+
+    def is_browser_gone_error(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        return (
+            "has been closed" in message
+            or "target page" in message
+            or "browser has been closed" in message
+            or "browser closed" in message
+        )
+
+    async def handle_ask_once(self, job: Job) -> dict[str, Any]:
         async with self.action_lock:
+            browser = await self.ensure_browser()
             if self.mode == "always_new":
-                if not self.browser:
-                    raise AgentError("browser_not_ready", "Browser is not connected.")
-                context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
                 page = await context.new_page()
                 await page.goto(self.target_url)
                 self.page = page

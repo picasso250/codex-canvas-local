@@ -104,11 +104,17 @@ function renderAuditLine(line) {
   }
 
   const event = line.event;
+  const status = event.status || event.event || "event";
+  const statusClass = event.error || event.daemonMessage || event.status === "failed" ? "failed" : "succeeded";
+  const daemonError = event.daemonCode || event.daemonMessage
+    ? `<div class="audit-prompt">${escapeHTML([event.daemonCode, event.daemonMessage].filter(Boolean).join(": "))}</div>`
+    : "";
+  const jobError = event.error ? `<div class="audit-prompt">${escapeHTML(event.error)}</div>` : "";
   row.innerHTML = `
     <div class="audit-row-head">
-      <span class="job-status succeeded">${escapeHTML(event.event || "event")}</span>
+      <span class="job-status ${statusClass}">${escapeHTML(status)}</span>
       <strong>${escapeHTML(event.jobId || "-")}</strong>
-      <span>${formatDate(event.createdAt)}</span>
+      <span>${formatDate(event.finishedAt || event.createdAt)}</span>
     </div>
     <div class="audit-grid">
       <span>Email</span><strong>${escapeHTML(event.email || "local")}</strong>
@@ -117,6 +123,8 @@ function renderAuditLine(line) {
       <span>UserAgent</span><strong>${escapeHTML(event.userAgent || "-")}</strong>
     </div>
     <div class="audit-prompt">${escapeHTML(event.prompt || "")}</div>
+    ${jobError}
+    ${daemonError}
     <details class="audit-details">
       <summary>原始 JSON</summary>
       <pre>${escapeHTML(JSON.stringify(event, null, 2))}</pre>
