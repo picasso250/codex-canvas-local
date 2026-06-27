@@ -54,10 +54,15 @@ async def pre_mouse_wait() -> None:
 
 
 async def type_like_user(page: Page, text: str) -> None:
-    for char in text:
-        await asyncio.sleep(0.01)
-        await page.keyboard.type(char)
-        await asyncio.sleep(0.01)
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    for index, line in enumerate(lines):
+        for char in line:
+            await asyncio.sleep(0.01)
+            await page.keyboard.type(char)
+            await asyncio.sleep(0.01)
+        if index < len(lines) - 1:
+            await page.keyboard.press("Shift+Enter")
+            await asyncio.sleep(0.02)
 
 
 async def click_element_center(page: Page, selector: str) -> None:
