@@ -26,6 +26,15 @@ or with a full listen address:
 .\bin\codex-canvas-local.exe --addr 127.0.0.1:9000
 ```
 
+Job notifications are delivered to WinNotifyApi on:
+
+```text
+http://127.0.0.1:25378/notify
+```
+
+Set `WINNOTIFYAPI_PORT` before starting this service if WinNotifyApi uses a
+different port.
+
 ## Audit Log
 
 Accepted generation requests are appended to:

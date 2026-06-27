@@ -28,7 +28,7 @@ func TestNewAuditEventUsesAccessHeaders(t *testing.T) {
 		CreatedAt: time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC),
 	}
 
-	event := newAuditEvent(req, j)
+	event := newAuditWorkEvent(req, j)
 	if event.Email != "user@example.com" {
 		t.Fatalf("email = %q", event.Email)
 	}
@@ -249,7 +249,7 @@ func TestListJobsFiltersByUser(t *testing.T) {
 	s.jobs["other-job"] = &job{ID: "other-job", Mode: "work", UserKey: s.userKey(otherReq), Prompt: "theirs", Status: "succeeded", CreatedAt: time.Now()}
 
 	rr := httptest.NewRecorder()
-	s.listJobs(rr, userReq)
+	s.listJobs(rr, userReq, "work")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
 	}
@@ -273,7 +273,7 @@ func TestSubmittedNotificationIncludesEmailAndFullPrompt(t *testing.T) {
 	prompt := "line one\nline two\n完整提示词"
 	j := &job{Email: "user@example.com", Prompt: prompt}
 
-	got := submittedNotificationMessage(j)
+	got := workSubmittedMessage(j)
 	if !strings.Contains(got, "User: user@example.com") {
 		t.Fatalf("notification missing email: %q", got)
 	}
@@ -285,10 +285,34 @@ func TestSubmittedNotificationIncludesEmailAndFullPrompt(t *testing.T) {
 func TestFinishedNotificationIncludesExitCodeAndFailureText(t *testing.T) {
 	j := &job{ID: "job123", Email: "user@example.com", Error: "codex exited with error: exit status 7"}
 
-	got := finishedNotificationMessage(j, 7)
+	got := workFinishedMessage(j, 7)
 	for _, want := range []string{"User: user@example.com", "Job: job123", "Exit code: 7", "FAILED:", j.Error} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("notification missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestWinNotifyURL(t *testing.T) {
+	got, err := winNotifyURL("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "http://127.0.0.1:25378/notify" {
+		t.Fatalf("default URL = %q", got)
+	}
+
+	got, err = winNotifyURL("25379")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "http://127.0.0.1:25379/notify" {
+		t.Fatalf("custom URL = %q", got)
+	}
+
+	for _, port := range []string{"80", "70000", "abc"} {
+		if _, err := winNotifyURL(port); err == nil {
+			t.Fatalf("expected invalid port %q to fail", port)
 		}
 	}
 }

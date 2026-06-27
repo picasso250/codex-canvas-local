@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Canvas Local</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div>
+            <p class="eyebrow">本地生成工作台</p>
+            <h1>Codex Canvas</h1>
+          </div>
+        </div>
+        <div class="topbar-meta">
+          <div class="model-chip">基于 OpenAI GPT Image 2 模型</div>
+          <div class="usage-chip" id="usageLimits">限额 --</div>
+          <div class="nav-chip">创作</div>
+
+          <div class="status-pill" id="statusPill">就绪</div>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="prompt-panel" aria-labelledby="composeTitle">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">创作</p>
+              <h2 id="composeTitle">生成设置</h2>
+            </div>
+            <span id="promptMeta">0 字</span>
+          </div>
+
+          <div class="model-note" aria-label="模型能力">
+            <strong>GPT Image 2</strong>
+            <span>高质量生成</span>
+            <span>参考图编辑</span>
+            <span>文字渲染增强</span>
+            <span>多图输出</span>
+          </div>
+
+          <form id="promptForm" class="prompt-form">
+            <label for="prompt">提示词</label>
+            <textarea id="prompt" name="prompt" spellcheck="false" placeholder="雨后傍晚的小学门口小卖部，真实纪实摄影，地面微湿有反光，不要文字水印"></textarea>
+
+            <label for="referenceImages">参考图</label>
+            <div class="upload-box">
+              <div class="upload-control">
+                <label class="upload-button" for="referenceImages">选择图片</label>
+                <input id="referenceImages" class="sr-only" name="images" type="file" accept="image/png,image/jpeg,.jfif,image/webp,image/gif" multiple>
+                <span id="fileInputSummary">未选择文件</span>
+                <span id="referenceMeta">0 张参考图</span>
+              </div>
+              <div id="referenceList" class="reference-list">未选择图片。</div>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" id="runButton">生成图片</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="result-panel" aria-labelledby="resultTitle">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">输出</p>
+              <h2 id="resultTitle">生成结果</h2>
+            </div>
+            <span id="imageCount">0 张</span>
+          </div>
+          <div id="gallery" class="gallery empty">
+            <div class="empty-state">
+              <div class="empty-glyph" aria-hidden="true"></div>
+              <p>生成完成后，图片会显示在这里。</p>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <aside class="side-rail">
+        <details class="activity" id="logDetails" open>
+          <summary class="activity-summary">
+            <span>运行日志</span>
+            <span id="logSummary">等待任务</span>
+          </summary>
+          <div class="log-actions">
+            <button type="button" id="refreshButton" class="icon-button" title="刷新日志" aria-label="刷新日志">↻</button>
+          </div>
+          <pre id="logOutput">等待任务。</pre>
+        </details>
+
+        <section class="history-panel" aria-labelledby="historyTitle">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">历史</p>
+              <h2 id="historyTitle">任务记录</h2>
+            </div>
+          </div>
+          <div id="jobs" class="jobs"></div>
+        </section>
+      </aside>
+    </main>
+
+    <div class="upgrade-modal" id="upgradeModal" hidden>
+      <div class="upgrade-backdrop" data-upgrade-close></div>
+      <section class="upgrade-dialog" role="dialog" aria-modal="true" aria-labelledby="upgradeTitle">
+        <p class="section-kicker">本次升级</p>
+        <h2 id="upgradeTitle">更适合连续创作的图片工作台</h2>
+        <div class="upgrade-list">
+          <div>
+            <strong>用户持久工作区</strong>
+            <span>同一用户的参考图、历史输出和中间文件会保留在自己的运行目录里。</span>
+          </div>
+          <div>
+            <strong>历史上下文可见</strong>
+            <span>连续改图时，Codex 可以看到同一用户之前的素材和结果。</span>
+          </div>
+          <div>
+            <strong>结果自动去重</strong>
+            <span>同一张图片即使出现在多个生成目录，也只会在结果区显示一次。</span>
+          </div>
+        </div>
+        <button type="button" id="upgradeDismiss">我知道了</button>
+      </section>
+    </div>
+
+    <script src="/pic.js"></script>
+  </body>
+</html>
