@@ -102,7 +102,7 @@ async function loadJobs() {
     button.type = "button";
     button.innerHTML = `
       <span class="job-status ${job.status}">${jobStatusText(job.status)}</span>
-      <span class="job-prompt">${escapeHTML(displayPrompt(job.prompt))}</span>
+      <span class="job-prompt">${escapeHTML(job.prompt)}</span>
       <span class="job-time">${new Date(job.createdAt).toLocaleString()}</span>
     `;
     button.addEventListener("click", () => {
@@ -254,13 +254,6 @@ function imageExtension(type) {
 
 function renderPromptMeta() {
   promptMeta.textContent = `${promptInput.value.trim().length} 字`;
-}
-
-function displayPrompt(prompt) {
-  const marker = "use skill $imagegen :";
-  const index = String(prompt || "").indexOf(marker);
-  if (index === -1) return prompt;
-  return String(prompt).slice(index + marker.length).trim();
 }
 
 function jobStatusText(status) {
