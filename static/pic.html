@@ -12,39 +12,31 @@
         <div class="brand">
           <div class="brand-mark" aria-hidden="true"></div>
           <div>
-            <p class="eyebrow">本地生成工作台</p>
-            <h1>Codex Canvas</h1>
+            <p class="eyebrow">图片生成</p>
           </div>
         </div>
         <div class="topbar-meta">
           <div class="model-chip">基于 OpenAI GPT Image 2 模型</div>
-          <div class="nav-chip">创作</div>
-
-          <div class="status-pill" id="statusPill">就绪</div>
         </div>
       </header>
 
       <section class="workspace">
-        <section class="prompt-panel" aria-labelledby="composeTitle">
+        <section class="prompt-panel" aria-label="创作面板">
           <div class="section-head">
             <div>
               <p class="section-kicker">创作</p>
-              <h2 id="composeTitle">生成设置</h2>
             </div>
-            <span id="promptMeta">0 字</span>
           </div>
 
           <div class="model-note" aria-label="模型能力">
-            <strong>GPT Image 2</strong>
-            <span>高质量生成</span>
             <span>参考图编辑</span>
             <span>文字渲染增强</span>
             <span>多图输出</span>
           </div>
 
           <form id="promptForm" class="prompt-form">
-            <label for="prompt">提示词</label>
-            <textarea id="prompt" name="prompt" spellcheck="false" placeholder="雨后傍晚的小学门口小卖部，真实纪实摄影，地面微湿有反光，不要文字水印"></textarea>
+            <label for="prompt">提示词</label> <span id="promptMeta">0 字</span>
+            <textarea id="prompt" name="prompt" spellcheck="false" placeholder="雨后的傍晚，90年代小学门口小卖部，电影感布光，招牌上有「小卖部」三个汉字，门口贴着「失物招领：一串钥匙」手写纸条，地面湿漉漉有反光"></textarea>
 
             <label for="referenceImages">参考图</label>
             <div class="upload-box">

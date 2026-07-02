@@ -7,7 +7,6 @@ const fileInputSummary = document.querySelector("#fileInputSummary");
 const promptMeta = document.querySelector("#promptMeta");
 const runButton = document.querySelector("#runButton");
 const refreshButton = document.querySelector("#refreshButton");
-const statusPill = document.querySelector("#statusPill");
 const logDetails = document.querySelector("#logDetails");
 const logSummary = document.querySelector("#logSummary");
 const logOutput = document.querySelector("#logOutput");
@@ -26,13 +25,11 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const prompt = promptInput.value.trim();
   if (!prompt) {
-    setStatus("需要提示词", "warn");
     promptInput.focus();
     return;
   }
 
   runButton.disabled = true;
-  setStatus("排队中", "busy");
   setLog("提交任务...\n", "提交任务");
   logDetails.open = true;
   clearGallery();
@@ -55,7 +52,6 @@ form.addEventListener("submit", async (event) => {
     await loadJobs();
   } catch (error) {
     runButton.disabled = false;
-    setStatus("失败", "error");
     setLog(`${logOutput.textContent}提交失败：${error.message}\n`, "提交失败");
   }
 });
@@ -116,10 +112,6 @@ async function loadJobs() {
 }
 
 function renderJob(job) {
-  if (job.status === "queued") setStatus("排队中", "busy");
-  if (job.status === "running") setStatus("运行中", "busy");
-  if (job.status === "succeeded") setStatus("完成", "ok");
-  if (job.status === "failed") setStatus("失败", "error");
 
   setLog(job.log || "等待日志。", logLabel(job));
   maybeCollapseLog(job);
@@ -155,11 +147,6 @@ function renderImages(images) {
 
 function clearGallery() {
   renderImages([]);
-}
-
-function setStatus(text, tone) {
-  statusPill.textContent = text;
-  statusPill.className = `status-pill ${tone || ""}`;
 }
 
 function setLog(text, summary) {
@@ -226,7 +213,6 @@ function handlePromptPaste(event) {
   event.preventDefault();
   appendReferenceFiles(pastedImages);
   renderReferenceList();
-  setStatus(`已粘贴 ${pastedImages.length} 张图`, "ok");
 }
 
 function appendReferenceFiles(files) {
