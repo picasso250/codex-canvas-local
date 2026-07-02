@@ -24,6 +24,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 53166
 SERVICE_ID = "imagegen-daemon"
 PROVIDER_ID = "imagegen"
+IMAGEGEN_TAB_RECOVERY_SECONDS = 60.0
 
 
 class AgentError(Exception):
@@ -376,7 +377,7 @@ class ChatGPTAgent:
                 'button[aria-label*="Send"], button[aria-label*="发送"]'
             )
             await click_element_center(page, send_selector)
-            response = await wait_for_imagegen(
+            page, response = await self.wait_for_imagegen_with_tab_recovery(
                 page,
                 before_turns,
                 before_assistant_count,
@@ -394,6 +395,51 @@ class ChatGPTAgent:
                 "images": saved_images,
                 "current_url": page.url,
             }
+
+    async def wait_for_imagegen_with_tab_recovery(
+        self,
+        page: Page,
+        before_turn_count: int,
+        before_assistant_count: int,
+        timeout_seconds: float,
+    ) -> tuple[Page, str]:
+        first_wait = min(timeout_seconds, IMAGEGEN_TAB_RECOVERY_SECONDS)
+        try:
+            response = await wait_for_imagegen(
+                page,
+                before_turn_count,
+                before_assistant_count,
+                first_wait,
+            )
+            return page, response
+        except AgentError as exc:
+            if exc.code != "response_timeout" or timeout_seconds <= first_wait:
+                raise
+
+        recovery_url = page.url
+        if not recovery_url or recovery_url == "about:blank":
+            raise AgentError("response_timeout", "Timed out waiting for image generation to complete.")
+
+        try:
+            await page.close()
+        except Exception:
+            pass
+
+        browser = await self.ensure_browser()
+        context = browser.contexts[0] if browser.contexts else await browser.new_context()
+        recovery_page = await context.new_page()
+        self.page = recovery_page
+        await recovery_page.goto(recovery_url)
+        await recovery_page.bring_to_front()
+        await stable_wait()
+
+        response = await wait_for_imagegen(
+            recovery_page,
+            before_turn_count,
+            before_assistant_count,
+            timeout_seconds - first_wait,
+        )
+        return recovery_page, response
 
     async def upload_images(self, page: Page, image_paths: list[str]) -> None:
         for path in image_paths:

@@ -1,8 +1,12 @@
 param(
     [string]$Url = "http://127.0.0.1:8765",
+    [string]$AgentUrl = "http://127.0.0.1:53166",
     [string]$ExePath = "$PSScriptRoot\..\bin\codex-canvas-local.exe",
     [string]$ProjectRoot = "$PSScriptRoot\..",
     [int]$HealthTimeoutSec = 20,
+    [int]$WaitPollSec = 5,
+    [int]$WaitTimeoutSec = 3600,
+    [switch]$Wait,
     [switch]$Force
 )
 
@@ -25,18 +29,37 @@ function Get-CanvasProcess([string]$ResolvedExePath) {
 }
 
 function Get-ActiveJobs([string]$BaseUrl) {
+    $allEndpoint = "$BaseUrl/api/jobs"
     try {
-        $jobs = Invoke-RestMethod -Uri "$BaseUrl/api/work/jobs" -Method Get -TimeoutSec 5
+        $jobs = Invoke-RestMethod -Uri $allEndpoint -Method Get -TimeoutSec 5
+        if ($null -ne $jobs) {
+            return @($jobs | Where-Object { $_.status -eq "queued" -or $_.status -eq "running" })
+        }
+        return @()
     } catch {
-        Write-Warning "Could not read $BaseUrl/api/work/jobs: $($_.Exception.Message)"
-        return @()
+        Write-Warning "Could not read ${allEndpoint}: $($_.Exception.Message). Falling back to per-mode job lists."
     }
 
-    if ($null -eq $jobs) {
-        return @()
+    $active = @()
+    foreach ($mode in @("work", "pic")) {
+        $endpoint = "$BaseUrl/api/$mode/jobs"
+        try {
+            $jobs = Invoke-RestMethod -Uri $endpoint -Method Get -TimeoutSec 5
+        } catch {
+            Write-Warning "Could not read ${endpoint}: $($_.Exception.Message)"
+            continue
+        }
+
+        if ($null -eq $jobs) {
+            continue
+        }
+
+        $active += @($jobs |
+            Where-Object { $_.status -eq "queued" -or $_.status -eq "running" } |
+            Select-Object @{Name = "mode"; Expression = { $mode } }, id, status, createdAt)
     }
 
-    return @($jobs | Where-Object { $_.status -eq "queued" -or $_.status -eq "running" })
+    return $active
 }
 
 function Wait-Healthy([string]$BaseUrl, [int]$TimeoutSec) {
@@ -55,6 +78,28 @@ function Wait-Healthy([string]$BaseUrl, [int]$TimeoutSec) {
     throw "Service did not become healthy at $BaseUrl within $TimeoutSec seconds."
 }
 
+function Get-ActiveAgentRequest([string]$BaseUrl) {
+    try {
+        $status = Invoke-RestMethod -Uri "$BaseUrl/status" -Method Get -TimeoutSec 5
+    } catch {
+        return $null
+    }
+
+    $queueLength = 0
+    if ($null -ne $status.queue_length) {
+        $queueLength = [int]$status.queue_length
+    }
+    if ([bool]$status.busy -or $queueLength -gt 0) {
+        return [pscustomobject]@{
+            mode = "agent"
+            id = $status.running_request_id
+            status = "running"
+            createdAt = ""
+        }
+    }
+    return $null
+}
+
 $ProjectRoot = Resolve-FullPath $ProjectRoot
 $ExePath = Resolve-FullPath $ExePath
 $tmpExe = Join-Path $ProjectRoot "bin\codex-canvas-local.new.exe"
@@ -62,10 +107,25 @@ $tmpExe = Join-Path $ProjectRoot "bin\codex-canvas-local.new.exe"
 Set-Location $ProjectRoot
 
 $proc = Get-CanvasProcess $ExePath
-$activeJobs = Get-ActiveJobs $Url
+$waitDeadline = (Get-Date).AddSeconds($WaitTimeoutSec)
+do {
+    $activeJobs = Get-ActiveJobs $Url
+    $activeAgent = Get-ActiveAgentRequest $AgentUrl
+    if ($null -ne $activeAgent) {
+        $activeJobs = @($activeJobs) + $activeAgent
+    }
+    if ($activeJobs.Count -eq 0 -or $Force -or -not $Wait) {
+        break
+    }
+    $summary = $activeJobs | Select-Object mode,id,status,createdAt | Format-Table -AutoSize | Out-String
+    Write-Host "Waiting for active jobs before restart:`n$summary"
+    Start-Sleep -Seconds $WaitPollSec
+} while ((Get-Date) -lt $waitDeadline)
+
 if ($activeJobs.Count -gt 0 -and -not $Force) {
-    $summary = $activeJobs | Select-Object id,status,createdAt | Format-Table -AutoSize | Out-String
-    throw "Refusing to restart while jobs are active. Use -Force to override.`n$summary"
+    $summary = $activeJobs | Select-Object mode,id,status,createdAt | Format-Table -AutoSize | Out-String
+    $hint = if ($Wait) { "Timed out waiting for jobs to finish. Use -Force to override." } else { "Use -Wait to wait, or -Force to override." }
+    throw "Refusing to restart while jobs are active. $hint`n$summary"
 }
 
 Write-Host "Building $tmpExe"

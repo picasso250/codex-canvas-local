@@ -41,10 +41,22 @@ func (s *server) handleWorkJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userKey := s.userKey(r)
+	if s.store != nil {
+		job, ok, err := s.store.getJob(userKey, "work", id)
+		if err != nil {
+			http.Error(w, "could not read job", http.StatusInternalServerError)
+			return
+		}
+		if ok {
+			writeJSON(w, http.StatusOK, job)
+			return
+		}
+	}
 	s.mu.RLock()
 	j := s.jobs[id]
 	s.mu.RUnlock()
-	if j == nil || j.UserKey != s.userKey(r) {
+	if j == nil || j.UserKey != userKey {
 		http.NotFound(w, r)
 		return
 	}
@@ -109,6 +121,10 @@ func (s *server) createWorkJob(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.jobs[id] = j
 	s.mu.Unlock()
+	if err := s.storeJob(j); err != nil {
+		http.Error(w, "could not store job", http.StatusInternalServerError)
+		return
+	}
 
 	go s.notifyWorkSubmitted(j)
 	go s.runJob(j)
@@ -127,10 +143,10 @@ func (s *server) runJob(j *job) {
 	defer func() { <-s.sem }()
 
 	start := time.Now()
-	j.setStatus("running", start, nil)
+	s.setJobStatus(j, "running", start, nil)
 
 	if err := os.MkdirAll(j.WorkDir, 0755); err != nil {
-		j.fail(fmt.Errorf("create session workdir: %w", err))
+		s.failJob(j, fmt.Errorf("create session workdir: %w", err))
 		return
 	}
 
@@ -151,16 +167,16 @@ func (s *server) runJob(j *job) {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		j.fail(fmt.Errorf("stdout pipe: %w", err))
+		s.failJob(j, fmt.Errorf("stdout pipe: %w", err))
 		return
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		j.fail(fmt.Errorf("stderr pipe: %w", err))
+		s.failJob(j, fmt.Errorf("stderr pipe: %w", err))
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		j.fail(fmt.Errorf("start codex: %w", err))
+		s.failJob(j, fmt.Errorf("start codex: %w", err))
 		return
 	}
 
@@ -174,24 +190,21 @@ func (s *server) runJob(j *job) {
 	exitCode = cmd.ProcessState.ExitCode()
 
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		j.fail(fmt.Errorf("codex timed out after %s", runTimeout))
+		s.failJob(j, fmt.Errorf("codex timed out after %s", runTimeout))
 		return
 	}
 	if waitErr != nil {
-		j.fail(fmt.Errorf("codex exited with error: %w", waitErr))
+		s.failJob(j, fmt.Errorf("codex exited with error: %w", waitErr))
 		return
 	}
 
 	images := s.collectImages(j, before, start)
 	j.mu.Lock()
-	j.Images = images
 	if len(images) == 0 {
 		j.Log += "\nCodex finished, but no new image file was detected. Check the log for the generated path.\n"
 	}
-	now := time.Now()
-	j.FinishedAt = &now
-	j.Status = "succeeded"
 	j.mu.Unlock()
+	s.finishJob(j, images)
 }
 
 func (s *server) notifyWorkSubmitted(j *job) {

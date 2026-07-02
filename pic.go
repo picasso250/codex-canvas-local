@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -45,7 +46,7 @@ func (s *server) handlePicJobs(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		s.createPicJob(w, r)
 	case http.MethodGet:
-		s.listJobs(w, r, "pic")
+		s.listPicJobs(w, r)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -63,15 +64,36 @@ func (s *server) handlePicJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userKey := s.userKey(r)
+	if s.store != nil {
+		job, ok, err := s.store.getJob(userKey, "pic", id)
+		if err != nil {
+			http.Error(w, "could not read job", http.StatusInternalServerError)
+			return
+		}
+		if ok {
+			writeJSON(w, http.StatusOK, job)
+			return
+		}
+	}
 	s.mu.RLock()
 	j := s.jobs[id]
 	s.mu.RUnlock()
-	if j == nil || j.UserKey != s.userKey(r) {
-		http.NotFound(w, r)
+	if s.store == nil && j != nil && j.UserKey == userKey {
+		writeJSON(w, http.StatusOK, j.snapshot())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, j.snapshot())
+	recovered, err := s.recoveredPicJob(r, id)
+	if err != nil {
+		http.Error(w, "could not read pic history", http.StatusInternalServerError)
+		return
+	}
+	if recovered.ID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, recovered)
 }
 
 func (s *server) createPicJob(w http.ResponseWriter, r *http.Request) {
@@ -165,10 +187,187 @@ func (s *server) createPicJob(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.jobs[id] = j
 	s.mu.Unlock()
+	if err := s.storeJob(j); err != nil {
+		http.Error(w, "could not store job", http.StatusInternalServerError)
+		return
+	}
 
 	go s.notifyPicSubmitted(j)
 	go s.runPicJob(j, imagePaths)
 	writeJSON(w, http.StatusAccepted, createJobResponse{ID: id})
+}
+
+func (s *server) listPicJobs(w http.ResponseWriter, r *http.Request) {
+	userKey := s.userKey(r)
+	if s.store != nil {
+		jobs, err := s.store.listJobs(userKey, "pic")
+		if err != nil {
+			http.Error(w, "could not read pic jobs", http.StatusInternalServerError)
+			return
+		}
+		seen := map[string]bool{}
+		for _, job := range jobs {
+			seen[job.ID] = true
+		}
+		recovered, err := s.recoveredPicJobs(r, seen)
+		if err != nil {
+			http.Error(w, "could not read pic history", http.StatusInternalServerError)
+			return
+		}
+		for _, job := range recovered {
+			_ = s.storeRecoveredJob(job, userKey, displayEmail(accessEmail(r)))
+		}
+		jobs = append(jobs, recovered...)
+		sort.Slice(jobs, func(i, k int) bool {
+			return jobs[i].CreatedAt.After(jobs[k].CreatedAt)
+		})
+		writeJSON(w, http.StatusOK, jobs)
+		return
+	}
+
+	s.mu.RLock()
+	jobs := make([]jobView, 0, len(s.jobs))
+	seen := map[string]bool{}
+	for _, j := range s.jobs {
+		if j.UserKey != userKey || j.Mode != "pic" {
+			continue
+		}
+		status := j.snapshot()
+		jobs = append(jobs, status)
+		seen[status.ID] = true
+	}
+	s.mu.RUnlock()
+
+	recovered, err := s.recoveredPicJobs(r, seen)
+	if err != nil {
+		http.Error(w, "could not read pic history", http.StatusInternalServerError)
+		return
+	}
+	jobs = append(jobs, recovered...)
+
+	sort.Slice(jobs, func(i, k int) bool {
+		return jobs[i].CreatedAt.After(jobs[k].CreatedAt)
+	})
+	writeJSON(w, http.StatusOK, jobs)
+}
+
+func (s *server) recoveredPicJob(r *http.Request, id string) (jobView, error) {
+	jobs, err := s.recoveredPicJobs(r, map[string]bool{})
+	if err != nil {
+		return jobView{}, err
+	}
+	for _, job := range jobs {
+		if job.ID == id {
+			return job, nil
+		}
+	}
+	return jobView{}, nil
+}
+
+func (s *server) recoveredPicJobs(r *http.Request, skip map[string]bool) ([]jobView, error) {
+	userKey := s.userKey(r)
+	publicKey := publicUserKey(userKey)
+	runsRelRoot := filepath.ToSlash(filepath.Join("users", publicKey, "pic-outputs"))
+	runsRoot := filepath.Join(s.root, "runs", filepath.FromSlash(runsRelRoot))
+	entries, err := os.ReadDir(runsRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	meta, err := s.picAuditMetadata()
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	var jobs []jobView
+	for _, entry := range entries {
+		if !entry.IsDir() || skip[entry.Name()] {
+			continue
+		}
+		jobID := entry.Name()
+		jobDir := filepath.Join(runsRoot, jobID)
+		images, modTime := picImagesFromDir(jobDir, runsRelRoot, jobID)
+		if len(images) == 0 {
+			continue
+		}
+
+		createdAt := modTime
+		prompt := ""
+		if event, ok := meta[jobID]; ok {
+			createdAt = event.CreatedAt
+			prompt = event.Prompt
+		}
+		if createdAt.IsZero() {
+			createdAt = time.Now()
+		}
+
+		finishedAt := modTime
+		jobs = append(jobs, jobView{
+			ID:         jobID,
+			Mode:       "pic",
+			Prompt:     prompt,
+			WorkDir:    filepath.Join(s.root, "tmp", "users", userKey),
+			Status:     "succeeded",
+			CreatedAt:  createdAt,
+			FinishedAt: &finishedAt,
+			Log:        "Recovered from saved pic output directory.",
+			Images:     images,
+		})
+	}
+	return jobs, nil
+}
+
+func (s *server) picAuditMetadata() (map[string]auditEvent, error) {
+	resp, err := s.readAudit()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]auditEvent{}
+	for _, line := range resp.Lines {
+		if line.Event == nil || line.Event.JobID == "" {
+			continue
+		}
+		if line.Event.Event != "job_created" {
+			continue
+		}
+		if len(line.Event.CodexArgs) == 0 || !strings.Contains(strings.Join(line.Event.CodexArgs, " "), "chatgpt_agent.py") {
+			continue
+		}
+		out[line.Event.JobID] = *line.Event
+	}
+	return out, nil
+}
+
+func picImagesFromDir(jobDir, runsRelRoot, jobID string) ([]imageInfo, time.Time) {
+	entries, err := os.ReadDir(jobDir)
+	if err != nil {
+		return nil, time.Time{}
+	}
+	var images []imageInfo
+	var newest time.Time
+	for _, entry := range entries {
+		if entry.IsDir() || !imageExts[strings.ToLower(filepath.Ext(entry.Name()))] {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+		name := entry.Name()
+		images = append(images, imageInfo{
+			Name: name,
+			URL:  "/runs/" + runsRelRoot + "/" + url.PathEscape(jobID) + "/" + url.PathEscape(name),
+			Size: info.Size(),
+		})
+	}
+	sort.Slice(images, func(i, k int) bool { return images[i].Name < images[k].Name })
+	return images, newest
 }
 
 func (s *server) runPicJob(j *job, imagePaths []string) {
@@ -185,16 +384,16 @@ func (s *server) runPicJob(j *job, imagePaths []string) {
 	defer func() { <-s.picSem }()
 
 	start := time.Now()
-	j.setStatus("running", start, nil)
+	s.setJobStatus(j, "running", start, nil)
 
 	if err := s.ensureDaemon(); err != nil {
-		j.fail(fmt.Errorf("daemon ensure: %w", err))
+		s.failJob(j, fmt.Errorf("daemon ensure: %w", err))
 		return
 	}
 
 	picWorkDir := filepath.Join(j.WorkDir, "pic-outputs", j.ID)
 	if err := os.MkdirAll(picWorkDir, 0755); err != nil {
-		j.fail(fmt.Errorf("create pic workdir: %w", err))
+		s.failJob(j, fmt.Errorf("create pic workdir: %w", err))
 		return
 	}
 
@@ -211,7 +410,7 @@ func (s *server) runPicJob(j *job, imagePaths []string) {
 
 	resp, err := daemonPost("/ask", reqBody)
 	if err != nil {
-		j.fail(fmt.Errorf("daemon request: %w", err))
+		s.failJob(j, fmt.Errorf("daemon request: %w", err))
 		return
 	}
 
@@ -219,7 +418,7 @@ func (s *server) runPicJob(j *job, imagePaths []string) {
 		if err := s.writeAuditEvent(newAuditPicDaemonErrorEvent(j, resp)); err != nil {
 			s.appendLog(j, "Audit daemon error write failed: %v\n", err)
 		}
-		j.fail(fmt.Errorf("%s: %s", resp.Code, resp.Message))
+		s.failJob(j, fmt.Errorf("%s: %s", resp.Code, resp.Message))
 		return
 	}
 
@@ -256,12 +455,7 @@ func (s *server) runPicJob(j *job, imagePaths []string) {
 		}
 	}
 
-	j.mu.Lock()
-	j.Images = images
-	j.Status = "succeeded"
-	now := time.Now()
-	j.FinishedAt = &now
-	j.mu.Unlock()
+	s.finishJob(j, images)
 }
 
 func (s *server) ensureDaemon() error {

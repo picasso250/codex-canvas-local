@@ -46,6 +46,7 @@ var imageExts = map[string]bool{
 type server struct {
 	root      string
 	auditPath string
+	store     *jobStore
 	jobs      map[string]*job
 	mu        sync.RWMutex
 	auditMu   sync.Mutex
@@ -168,10 +169,19 @@ func main() {
 	if err := os.MkdirAll(filepath.Join(root, "data"), 0700); err != nil {
 		log.Fatal(err)
 	}
+	store, err := openJobStore(filepath.Join(root, "data", "jobs.sqlite"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer store.close()
+	if err := store.markInterruptedJobs("service restarted before job completed"); err != nil {
+		log.Fatal(err)
+	}
 
 	app := &server{
 		root:      root,
 		auditPath: filepath.Join(root, "data", "audit.jsonl"),
+		store:     store,
 		jobs:      make(map[string]*job),
 		sem:       make(chan struct{}, 1),
 		picSem:    make(chan struct{}, 1),
@@ -191,6 +201,7 @@ func main() {
 	mux.Handle("/", staticHandler(staticRoot, staticVersion))
 	mux.Handle("/runs/", http.StripPrefix("/runs/", http.FileServer(http.Dir(filepath.Join(root, "runs")))))
 	mux.HandleFunc("/api/audit", app.handleAudit)
+	mux.HandleFunc("/api/jobs", app.handleActiveJobs)
 	mux.HandleFunc("/api/usage-limits", app.handleUsageLimits)
 	mux.HandleFunc("/api/pic/jobs", app.handlePicJobs)
 	mux.HandleFunc("/api/pic/jobs/", app.handlePicJob)
@@ -312,7 +323,7 @@ func staticHandler(root fs.FS, version string) http.Handler {
 			name := "index.html"
 			if r.URL.Path == "/work" || r.URL.Path == "/work/" || isWorkHost(r.Host) {
 				name = "work.html"
-			} else if r.URL.Path == "/pic" || r.URL.Path == "/pic/" {
+			} else if r.URL.Path == "/pic" || r.URL.Path == "/pic/" || isPicHost(r.Host) {
 				name = "pic.html"
 			}
 			b, err := fs.ReadFile(root, name)
@@ -323,6 +334,7 @@ func staticHandler(root fs.FS, version string) http.Handler {
 			html := strings.ReplaceAll(string(b), `href="/styles.css"`, `href="/styles.css?v=`+version+`"`)
 			html = strings.ReplaceAll(html, `src="/app.js"`, `src="/app.js?v=`+version+`"`)
 			html = strings.ReplaceAll(html, `src="/work.js"`, `src="/work.js?v=`+version+`"`)
+			html = strings.ReplaceAll(html, `src="/pic.js"`, `src="/pic.js?v=`+version+`"`)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = io.WriteString(w, html)
 			return
@@ -333,18 +345,38 @@ func staticHandler(root fs.FS, version string) http.Handler {
 }
 
 func isWorkHost(host string) bool {
+	host = normalizedHost(host)
+	return host == "codex.io99.xyz"
+}
+
+func isPicHost(host string) bool {
+	host = normalizedHost(host)
+	return host == "pic.io99.xyz"
+}
+
+func normalizedHost(host string) string {
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host == "" {
-		return false
+		return ""
 	}
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	return host == "codex.io99.xyz"
+	return host
 }
 
 func (s *server) listJobs(w http.ResponseWriter, r *http.Request, mode string) {
 	userKey := s.userKey(r)
+	if s.store != nil {
+		jobs, err := s.store.listJobs(userKey, mode)
+		if err != nil {
+			http.Error(w, "could not read jobs", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, jobs)
+		return
+	}
+
 	s.mu.RLock()
 	jobs := make([]jobView, 0, len(s.jobs))
 	for _, j := range s.jobs {
@@ -352,6 +384,42 @@ func (s *server) listJobs(w http.ResponseWriter, r *http.Request, mode string) {
 			continue
 		}
 		jobs = append(jobs, j.snapshot())
+	}
+	s.mu.RUnlock()
+
+	sort.Slice(jobs, func(i, k int) bool {
+		return jobs[i].CreatedAt.After(jobs[k].CreatedAt)
+	})
+	writeJSON(w, http.StatusOK, jobs)
+}
+
+func (s *server) handleActiveJobs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !isLocalUser(r) {
+		http.Error(w, "permission denied", http.StatusForbidden)
+		return
+	}
+	if s.store != nil {
+		jobs, err := s.store.activeJobs()
+		if err != nil {
+			http.Error(w, "could not read jobs", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, jobs)
+		return
+	}
+
+	s.mu.RLock()
+	jobs := make([]jobView, 0, len(s.jobs))
+	for _, j := range s.jobs {
+		status := j.snapshot()
+		if status.Status != "queued" && status.Status != "running" {
+			continue
+		}
+		jobs = append(jobs, status)
 	}
 	s.mu.RUnlock()
 
@@ -558,6 +626,74 @@ func (j *job) setStatus(status string, started time.Time, finished *time.Time) {
 	j.FinishedAt = finished
 }
 
+func (s *server) storeJob(j *job) error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.upsertJob(j)
+}
+
+func (s *server) storeRecoveredJob(status jobView, userKey, email string) error {
+	if s.store == nil {
+		return nil
+	}
+	j := &job{
+		ID:         status.ID,
+		Mode:       status.Mode,
+		UserKey:    userKey,
+		Email:      email,
+		Prompt:     status.Prompt,
+		WorkDir:    status.WorkDir,
+		Status:     status.Status,
+		CreatedAt:  status.CreatedAt,
+		StartedAt:  status.StartedAt,
+		FinishedAt: status.FinishedAt,
+		Log:        status.Log,
+		Error:      status.Error,
+		Images:     status.Images,
+	}
+	if err := s.store.upsertJob(j); err != nil {
+		return err
+	}
+	return s.store.replaceImages(j.ID, status.Images)
+}
+
+func (s *server) updateStoredJob(j *job) {
+	if s.store == nil {
+		return
+	}
+	if err := s.store.updateJob(j.snapshot()); err != nil {
+		log.Printf("could not update job %s: %v", j.ID, err)
+	}
+}
+
+func (s *server) setJobStatus(j *job, status string, started time.Time, finished *time.Time) {
+	j.setStatus(status, started, finished)
+	s.updateStoredJob(j)
+}
+
+func (s *server) failJob(j *job, err error) {
+	j.fail(err)
+	s.updateStoredJob(j)
+}
+
+func (s *server) finishJob(j *job, images []imageInfo) {
+	j.mu.Lock()
+	j.Images = images
+	j.Status = "succeeded"
+	now := time.Now()
+	j.FinishedAt = &now
+	j.mu.Unlock()
+	if s.store != nil {
+		if err := s.store.updateJob(j.snapshot()); err != nil {
+			log.Printf("could not finish job %s: %v", j.ID, err)
+		}
+		if err := s.store.replaceImages(j.ID, images); err != nil {
+			log.Printf("could not store images for job %s: %v", j.ID, err)
+		}
+	}
+}
+
 func (j *job) fail(err error) {
 	now := time.Now()
 	j.mu.Lock()
@@ -570,8 +706,26 @@ func (j *job) fail(err error) {
 
 func (s *server) appendLog(j *job, format string, args ...any) {
 	j.mu.Lock()
-	defer j.mu.Unlock()
 	j.Log += fmt.Sprintf(format, args...)
+	status := jobView{
+		ID:         j.ID,
+		Mode:       j.Mode,
+		Prompt:     j.Prompt,
+		WorkDir:    j.WorkDir,
+		Status:     j.Status,
+		CreatedAt:  j.CreatedAt,
+		StartedAt:  j.StartedAt,
+		FinishedAt: j.FinishedAt,
+		Log:        j.Log,
+		Error:      j.Error,
+		Images:     append([]imageInfo(nil), j.Images...),
+	}
+	j.mu.Unlock()
+	if s.store != nil {
+		if err := s.store.updateJob(status); err != nil {
+			log.Printf("could not append job log %s: %v", j.ID, err)
+		}
+	}
 }
 
 func (s *server) userWorkDir(r *http.Request) string {

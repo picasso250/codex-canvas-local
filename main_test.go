@@ -262,6 +262,85 @@ func TestListJobsFiltersByUser(t *testing.T) {
 	}
 }
 
+func TestHandleActiveJobsReturnsAllUsersAndModes(t *testing.T) {
+	s := &server{jobs: map[string]*job{}}
+	now := time.Now()
+	s.jobs["work-running"] = &job{ID: "work-running", Mode: "work", UserKey: "user-a", Prompt: "work", Status: "running", CreatedAt: now}
+	s.jobs["pic-queued"] = &job{ID: "pic-queued", Mode: "pic", UserKey: "user-b", Prompt: "pic", Status: "queued", CreatedAt: now.Add(time.Second)}
+	s.jobs["done"] = &job{ID: "done", Mode: "pic", UserKey: "user-c", Prompt: "done", Status: "succeeded", CreatedAt: now}
+
+	req := httptest.NewRequest("GET", "/api/jobs", nil)
+	rr := httptest.NewRecorder()
+	s.handleActiveJobs(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+
+	var got []jobView
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("jobs = %#v", got)
+	}
+	ids := map[string]bool{}
+	for _, job := range got {
+		ids[job.ID] = true
+	}
+	if !ids["work-running"] || !ids["pic-queued"] || ids["done"] {
+		t.Fatalf("jobs = %#v", got)
+	}
+}
+
+func TestJobStorePersistsJobsAndImages(t *testing.T) {
+	store, err := openJobStore(filepath.Join(t.TempDir(), "jobs.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.close()
+
+	now := time.Now().UTC()
+	j := &job{
+		ID:        "pic-job",
+		Mode:      "pic",
+		UserKey:   "user-a",
+		Email:     "user@example.com",
+		Prompt:    "draw",
+		WorkDir:   "tmp/users/user-a",
+		Status:    "running",
+		CreatedAt: now,
+	}
+	if err := store.upsertJob(j); err != nil {
+		t.Fatal(err)
+	}
+
+	j.Status = "succeeded"
+	finished := now.Add(time.Minute)
+	j.FinishedAt = &finished
+	if err := store.updateJob(j.snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.replaceImages(j.ID, []imageInfo{{Name: "generated.png", URL: "/runs/generated.png", Size: 123}}); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs, err := store.listJobs("user-a", "pic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || jobs[0].ID != j.ID || jobs[0].Status != "succeeded" || len(jobs[0].Images) != 1 {
+		t.Fatalf("jobs = %#v", jobs)
+	}
+
+	active, err := store.activeJobs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active jobs = %#v", active)
+	}
+}
+
 func TestBuildCodexPromptWorkModePassesThrough(t *testing.T) {
 	j := &job{Mode: "work", Prompt: "inspect files"}
 	if got := buildCodexPrompt(j); got != "inspect files" {
