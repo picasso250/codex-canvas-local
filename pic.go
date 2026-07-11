@@ -375,7 +375,6 @@ func (s *server) runPicJob(j *job, imagePaths []string) {
 		if err := s.writeAuditEvent(newAuditPicFinishedEvent(j)); err != nil {
 			s.appendLog(j, "Audit finish write failed: %v\n", err)
 		}
-		go s.refreshUsageLimits()
 		s.notifyPicFinished(j)
 	}()
 
