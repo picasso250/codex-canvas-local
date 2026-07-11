@@ -155,15 +155,44 @@ async def wait_for_response(
     raise AgentError("response_timeout", "Timed out waiting for a stable ChatGPT response.")
 
 
+def imagegen_state_ready(state: dict[str, Any]) -> bool:
+    return bool(
+        state.get("has_images")
+        and state.get("images_loaded")
+        and state.get("has_reply_actions")
+        and not state.get("has_preview")
+        and not state.get("is_streaming")
+        and not state.get("has_stop_button")
+    )
+
+
 async def imagegen_ready(page: Page, before_turn_count: int) -> bool:
-    return await page.evaluate("""(beforeTurns) => {
-        const turns = document.querySelectorAll('[data-testid^="conversation-turn-"]');
-        if (turns.length <= beforeTurns) return false;
-        const containers = document.querySelectorAll('[class*="imagegen-image"]');
-        if (containers.length === 0) return false;
-        const imgs = [...containers].flatMap(c => [...c.querySelectorAll('img')]);
-        return imgs.length > 0 && imgs.every(img => img.naturalWidth > 0);
+    state = await page.evaluate("""(beforeTurns) => {
+        const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')].slice(beforeTurns);
+        const assistantTurn = [...turns].reverse().find(turn => turn.getAttribute('data-turn') === 'assistant');
+        if (!assistantTurn) return {};
+
+        const containers = [...assistantTurn.querySelectorAll('[class*="imagegen-image"]')];
+        const imgs = containers.flatMap(container => [...container.querySelectorAll('img')]);
+        const hasPreview = [...assistantTurn.querySelectorAll('span')]
+            .some(element => (element.textContent || '').trim() === '预览');
+        const stopButton = document.querySelector('button[data-testid="stop-button"]');
+        const stopButtonVisible = !!stopButton && !!(
+            stopButton.offsetWidth || stopButton.offsetHeight || stopButton.getClientRects().length
+        );
+
+        return {
+            has_images: containers.length > 0 && imgs.length > 0,
+            images_loaded: imgs.length > 0 && imgs.every(img =>
+                img.complete && img.naturalWidth > 0 && img.naturalHeight > 0
+            ),
+            has_preview: hasPreview,
+            is_streaming: !!assistantTurn.querySelector('[data-streaming-response-status]'),
+            has_stop_button: stopButtonVisible,
+            has_reply_actions: !!assistantTurn.querySelector('[aria-label="回复操作"], [aria-label="Response actions"]'),
+        };
     }""", before_turn_count)
+    return imagegen_state_ready(state)
 
 
 async def get_text_response(page: Page, before_turn_count: int, before_assistant_count: int) -> str:
@@ -462,11 +491,17 @@ class ChatGPTAgent:
         os.makedirs(workdir, exist_ok=True)
 
         unique_urls = await page.evaluate("""() => {
-            const containers = document.querySelectorAll('[class*="imagegen-image"]');
+            const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')];
+            const assistantTurn = [...turns].reverse().find(turn => turn.getAttribute('data-turn') === 'assistant');
+            if (!assistantTurn) return [];
+            const containers = assistantTurn.querySelectorAll('[class*="imagegen-image"]');
             const urls = new Set();
             containers.forEach(c => {
                 const imgs = c.querySelectorAll('img');
-                imgs.forEach(img => { if (img.src) urls.add(img.src); });
+                imgs.forEach(img => {
+                    const url = img.currentSrc || img.src;
+                    if (url) urls.add(url);
+                });
             });
             return [...urls];
         }""")
