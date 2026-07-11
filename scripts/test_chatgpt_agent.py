@@ -1,6 +1,7 @@
 import importlib.util
 import sys
 import unittest
+from unittest.mock import AsyncMock, patch
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("chatgpt_agent.py")
@@ -17,6 +18,7 @@ class ImagegenStateReadyTests(unittest.TestCase):
             "has_images": True,
             "images_loaded": True,
             "has_reply_actions": True,
+            "image_urls": ["https://example.test/image.png"],
             "has_preview": False,
             "is_streaming": False,
             "has_stop_button": False,
@@ -43,6 +45,88 @@ class ImagegenStateReadyTests(unittest.TestCase):
                 state = self.complete_state()
                 state[key] = False
                 self.assertFalse(agent.imagegen_state_ready(state))
+
+
+class FakePage:
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.closed = False
+        self.visited_url = None
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def goto(self, url: str) -> None:
+        self.visited_url = url
+        self.url = url
+
+    async def bring_to_front(self) -> None:
+        return None
+
+
+class FakeContext:
+    def __init__(self, recovery_page: FakePage) -> None:
+        self.recovery_page = recovery_page
+
+    async def new_page(self) -> FakePage:
+        return self.recovery_page
+
+
+class ImagegenRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_second_wait_is_capped_at_60_seconds_and_falls_back_to_images(self):
+        original_page = FakePage("https://chatgpt.com/c/test")
+        recovery_page = FakePage("about:blank")
+        context = FakeContext(recovery_page)
+        browser = type("FakeBrowser", (), {"contexts": [context]})()
+        chatgpt_agent = agent.ChatGPTAgent("http://127.0.0.1:9222", "https://chatgpt.com/")
+        chatgpt_agent.ensure_browser = AsyncMock(return_value=browser)
+        timeout = agent.AgentError("response_timeout", "timeout")
+
+        with (
+            patch.object(agent, "wait_for_imagegen", new=AsyncMock(side_effect=[timeout, timeout])) as wait_mock,
+            patch.object(agent, "stable_wait", new=AsyncMock()),
+            patch.object(
+                agent,
+                "imagegen_state",
+                new=AsyncMock(return_value={"image_urls": ["https://example.test/image.png"]}),
+            ),
+            patch.object(agent, "get_text_response", new=AsyncMock(return_value="partial response")),
+        ):
+            page, response = await chatgpt_agent.wait_for_imagegen_with_tab_recovery(
+                original_page,
+                before_turn_count=0,
+                before_assistant_count=0,
+                timeout_seconds=180.0,
+            )
+
+        self.assertIs(page, recovery_page)
+        self.assertEqual(response, "partial response")
+        self.assertTrue(original_page.closed)
+        self.assertEqual(recovery_page.visited_url, "https://chatgpt.com/c/test")
+        self.assertEqual(wait_mock.await_args_list[0].args[-1], 60.0)
+        self.assertEqual(wait_mock.await_args_list[1].args[-1], 60.0)
+
+    async def test_final_timeout_still_fails_without_any_image_url(self):
+        original_page = FakePage("https://chatgpt.com/c/test")
+        recovery_page = FakePage("about:blank")
+        context = FakeContext(recovery_page)
+        browser = type("FakeBrowser", (), {"contexts": [context]})()
+        chatgpt_agent = agent.ChatGPTAgent("http://127.0.0.1:9222", "https://chatgpt.com/")
+        chatgpt_agent.ensure_browser = AsyncMock(return_value=browser)
+        timeout = agent.AgentError("response_timeout", "timeout")
+
+        with (
+            patch.object(agent, "wait_for_imagegen", new=AsyncMock(side_effect=[timeout, timeout])),
+            patch.object(agent, "stable_wait", new=AsyncMock()),
+            patch.object(agent, "imagegen_state", new=AsyncMock(return_value={"image_urls": []})),
+        ):
+            with self.assertRaisesRegex(agent.AgentError, "Timed out waiting"):
+                await chatgpt_agent.wait_for_imagegen_with_tab_recovery(
+                    original_page,
+                    before_turn_count=0,
+                    before_assistant_count=0,
+                    timeout_seconds=180.0,
+                )
 
 
 if __name__ == "__main__":

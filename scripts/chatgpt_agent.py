@@ -25,6 +25,7 @@ DEFAULT_PORT = 53166
 SERVICE_ID = "imagegen-daemon"
 PROVIDER_ID = "imagegen"
 IMAGEGEN_TAB_RECOVERY_SECONDS = 60.0
+IMAGEGEN_RECOVERY_WAIT_SECONDS = 60.0
 
 
 class AgentError(Exception):
@@ -166,14 +167,19 @@ def imagegen_state_ready(state: dict[str, Any]) -> bool:
     )
 
 
-async def imagegen_ready(page: Page, before_turn_count: int) -> bool:
-    state = await page.evaluate("""(beforeTurns) => {
+def imagegen_state_has_usable_images(state: dict[str, Any]) -> bool:
+    return bool(state.get("image_urls"))
+
+
+async def imagegen_state(page: Page, before_turn_count: int) -> dict[str, Any]:
+    return await page.evaluate("""(beforeTurns) => {
         const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')].slice(beforeTurns);
         const assistantTurn = [...turns].reverse().find(turn => turn.getAttribute('data-turn') === 'assistant');
         if (!assistantTurn) return {};
 
         const containers = [...assistantTurn.querySelectorAll('[class*="imagegen-image"]')];
         const imgs = containers.flatMap(container => [...container.querySelectorAll('img')]);
+        const imageUrls = [...new Set(imgs.map(img => img.currentSrc || img.src).filter(Boolean))];
         const hasPreview = [...assistantTurn.querySelectorAll('span')]
             .some(element => (element.textContent || '').trim() === '预览');
         const stopButton = document.querySelector('button[data-testid="stop-button"]');
@@ -186,13 +192,17 @@ async def imagegen_ready(page: Page, before_turn_count: int) -> bool:
             images_loaded: imgs.length > 0 && imgs.every(img =>
                 img.complete && img.naturalWidth > 0 && img.naturalHeight > 0
             ),
+            image_urls: imageUrls,
             has_preview: hasPreview,
             is_streaming: !!assistantTurn.querySelector('[data-streaming-response-status]'),
             has_stop_button: stopButtonVisible,
             has_reply_actions: !!assistantTurn.querySelector('[aria-label="回复操作"], [aria-label="Response actions"]'),
         };
     }""", before_turn_count)
-    return imagegen_state_ready(state)
+
+
+async def imagegen_ready(page: Page, before_turn_count: int) -> bool:
+    return imagegen_state_ready(await imagegen_state(page, before_turn_count))
 
 
 async def get_text_response(page: Page, before_turn_count: int, before_assistant_count: int) -> str:
@@ -462,11 +472,30 @@ class ChatGPTAgent:
         await recovery_page.bring_to_front()
         await stable_wait()
 
-        response = await wait_for_imagegen(
+        recovery_wait = min(
+            max(timeout_seconds - first_wait, 0.0),
+            IMAGEGEN_RECOVERY_WAIT_SECONDS,
+        )
+        try:
+            response = await wait_for_imagegen(
+                recovery_page,
+                before_turn_count,
+                before_assistant_count,
+                recovery_wait,
+            )
+            return recovery_page, response
+        except AgentError as exc:
+            if exc.code != "response_timeout":
+                raise
+
+        state = await imagegen_state(recovery_page, before_turn_count)
+        if not imagegen_state_has_usable_images(state):
+            raise AgentError("response_timeout", "Timed out waiting for image generation to complete.")
+
+        response = await get_text_response(
             recovery_page,
             before_turn_count,
             before_assistant_count,
-            timeout_seconds - first_wait,
         )
         return recovery_page, response
 
