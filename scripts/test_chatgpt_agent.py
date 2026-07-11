@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import sys
 import unittest
@@ -70,6 +71,83 @@ class FakeContext:
 
     async def new_page(self) -> FakePage:
         return self.recovery_page
+
+
+class ImageUploadPromptFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_types_prompt_before_waiting_for_upload_completion(self):
+        events: list[str] = []
+        page = FakePage("about:blank")
+        context = FakeContext(page)
+        browser = type("FakeBrowser", (), {"contexts": [context]})()
+        chatgpt_agent = agent.ChatGPTAgent(
+            "http://127.0.0.1:9222",
+            "https://chatgpt.com/",
+            mode="always_new",
+        )
+        chatgpt_agent.ensure_browser = AsyncMock(return_value=browser)
+        chatgpt_agent.start_image_upload = AsyncMock(
+            side_effect=lambda *_: events.append("start_upload")
+        )
+        chatgpt_agent.wait_for_image_upload = AsyncMock(
+            side_effect=lambda *_: events.append("wait_upload")
+        )
+        chatgpt_agent.wait_for_imagegen_with_tab_recovery = AsyncMock(
+            side_effect=lambda *_: (events.append("wait_generation") or (page, "done"))
+        )
+        chatgpt_agent.download_images = AsyncMock(
+            side_effect=lambda *_: (events.append("download") or [])
+        )
+        future = asyncio.get_running_loop().create_future()
+        job = agent.Job(
+            request_id="request-1",
+            prompt="draw a cat",
+            timeout=180.0,
+            stable_seconds=5.0,
+            images=["reference.png"],
+            workdir="",
+            future=future,
+        )
+
+        async def record_sleep(seconds: float) -> None:
+            events.append(f"sleep:{seconds}")
+
+        async def record_click(_page, selector: str) -> None:
+            if selector == "#prompt-textarea":
+                events.append("click_prompt")
+            else:
+                events.append("click_send")
+
+        async def record_type(_page, text: str) -> None:
+            self.assertEqual(text, "生图 draw a cat")
+            events.append("type_prompt")
+
+        with (
+            patch.object(agent, "stable_wait", new=AsyncMock()),
+            patch.object(agent.asyncio, "sleep", new=record_sleep),
+            patch.object(agent, "turn_count", new=AsyncMock(return_value=0)),
+            patch.object(agent, "assistant_messages", new=AsyncMock(return_value=[])),
+            patch.object(agent, "click_element_center", new=record_click),
+            patch.object(agent, "type_like_user", new=record_type),
+        ):
+            result = await chatgpt_agent.handle_ask_once(job)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            events,
+            [
+                "sleep:1.0",
+                "start_upload",
+                "sleep:0.1",
+                "click_prompt",
+                "type_prompt",
+                "wait_upload",
+                "sleep:0.1",
+                "click_send",
+                "wait_generation",
+                "sleep:0.1",
+                "download",
+            ],
+        )
 
 
 class ImagegenRecoveryTests(unittest.IsolatedAsyncioTestCase):

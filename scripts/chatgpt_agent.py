@@ -397,10 +397,10 @@ class ChatGPTAgent:
             await stable_wait()
             await asyncio.sleep(1.0)
 
-            # Upload reference images
+            # Start uploading reference images, then type while the browser upload continues.
             saved_images: list[str] = []
             if job.images:
-                await self.upload_images(page, job.images)
+                await self.start_image_upload(page, job.images)
                 await asyncio.sleep(0.1)
 
             # Type prompt with "生图" prefix
@@ -409,6 +409,9 @@ class ChatGPTAgent:
             before_assistant_count = len(await assistant_messages(page))
             await click_element_center(page, "#prompt-textarea")
             await type_like_user(page, full_prompt)
+
+            if job.images:
+                await self.wait_for_image_upload(page)
             await asyncio.sleep(0.1)
 
             send_selector = (
@@ -499,12 +502,14 @@ class ChatGPTAgent:
         )
         return recovery_page, response
 
-    async def upload_images(self, page: Page, image_paths: list[str]) -> None:
+    async def start_image_upload(self, page: Page, image_paths: list[str]) -> None:
         for path in image_paths:
             if not os.path.isfile(path):
                 raise AgentError("image_not_found", f"Image not found: {path}")
         file_input = page.locator("#upload-photos")
         await file_input.set_input_files(image_paths)
+
+    async def wait_for_image_upload(self, page: Page) -> None:
         await page.wait_for_function(
             """() => {
                 const imgs = document.querySelectorAll('[class*="file-tile"] img[src]');
