@@ -151,7 +151,7 @@ class ImageUploadPromptFlowTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ImagegenRecoveryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_second_wait_is_capped_at_60_seconds_and_falls_back_to_images(self):
+    async def test_second_wait_is_capped_at_120_seconds_and_falls_back_to_images(self):
         original_page = FakePage("https://chatgpt.com/c/test")
         recovery_page = FakePage("about:blank")
         context = FakeContext(recovery_page)
@@ -182,7 +182,7 @@ class ImagegenRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(original_page.closed)
         self.assertEqual(recovery_page.visited_url, "https://chatgpt.com/c/test")
         self.assertEqual(wait_mock.await_args_list[0].args[-1], 60.0)
-        self.assertEqual(wait_mock.await_args_list[1].args[-1], 60.0)
+        self.assertEqual(wait_mock.await_args_list[1].args[-1], 120.0)
 
     async def test_final_timeout_still_fails_without_any_image_url(self):
         original_page = FakePage("https://chatgpt.com/c/test")
