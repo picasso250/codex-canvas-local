@@ -18,11 +18,8 @@ class ImagegenStateReadyTests(unittest.TestCase):
         return {
             "has_images": True,
             "images_loaded": True,
-            "has_reply_actions": True,
             "image_urls": ["https://example.test/image.png"],
             "has_preview": False,
-            "is_streaming": False,
-            "has_stop_button": False,
         }
 
     def test_accepts_completed_image_turn(self):
@@ -33,15 +30,15 @@ class ImagegenStateReadyTests(unittest.TestCase):
         state["has_preview"] = True
         self.assertFalse(agent.imagegen_state_ready(state))
 
-    def test_rejects_streaming_or_stop_button(self):
-        for key in ("is_streaming", "has_stop_button"):
-            with self.subTest(key=key):
-                state = self.complete_state()
-                state[key] = True
-                self.assertFalse(agent.imagegen_state_ready(state))
+    def test_accepts_when_chatgpt_controls_are_stuck(self):
+        state = self.complete_state()
+        state["has_reply_actions"] = False
+        state["is_streaming"] = True
+        state["has_stop_button"] = True
+        self.assertTrue(agent.imagegen_state_ready(state))
 
-    def test_requires_reply_actions_and_loaded_images(self):
-        for key in ("has_images", "images_loaded", "has_reply_actions"):
+    def test_requires_loaded_images(self):
+        for key in ("has_images", "images_loaded"):
             with self.subTest(key=key):
                 state = self.complete_state()
                 state[key] = False

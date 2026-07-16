@@ -160,10 +160,7 @@ def imagegen_state_ready(state: dict[str, Any]) -> bool:
     return bool(
         state.get("has_images")
         and state.get("images_loaded")
-        and state.get("has_reply_actions")
         and not state.get("has_preview")
-        and not state.get("is_streaming")
-        and not state.get("has_stop_button")
     )
 
 
@@ -182,10 +179,6 @@ async def imagegen_state(page: Page, before_turn_count: int) -> dict[str, Any]:
         const imageUrls = [...new Set(imgs.map(img => img.currentSrc || img.src).filter(Boolean))];
         const hasPreview = [...assistantTurn.querySelectorAll('span')]
             .some(element => (element.textContent || '').trim() === '预览');
-        const stopButton = document.querySelector('button[data-testid="stop-button"]');
-        const stopButtonVisible = !!stopButton && !!(
-            stopButton.offsetWidth || stopButton.offsetHeight || stopButton.getClientRects().length
-        );
 
         return {
             has_images: containers.length > 0 && imgs.length > 0,
@@ -194,9 +187,6 @@ async def imagegen_state(page: Page, before_turn_count: int) -> dict[str, Any]:
             ),
             image_urls: imageUrls,
             has_preview: hasPreview,
-            is_streaming: !!assistantTurn.querySelector('[data-streaming-response-status]'),
-            has_stop_button: stopButtonVisible,
-            has_reply_actions: !!assistantTurn.querySelector('[aria-label="回复操作"], [aria-label="Response actions"]'),
         };
     }""", before_turn_count)
 
