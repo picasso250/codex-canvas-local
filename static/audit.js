@@ -119,6 +119,7 @@ function renderAuditLine(line) {
     <div class="audit-grid">
       <span>Email</span><strong>${escapeHTML(event.email || "local")}</strong>
       <span>IP</span><strong>${escapeHTML(event.ip || "-")}</strong>
+      <span>耗时</span><strong>${formatDuration(event.createdAt, event.finishedAt)}</strong>
       <span>WorkDir</span><strong>${escapeHTML(event.workDir || "-")}</strong>
       <span>UserAgent</span><strong>${escapeHTML(event.userAgent || "-")}</strong>
     </div>
@@ -143,6 +144,22 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function formatDuration(createdAt, finishedAt) {
+  if (!createdAt || !finishedAt) return "-";
+  const durationMs = new Date(finishedAt).getTime() - new Date(createdAt).getTime();
+  if (!Number.isFinite(durationMs) || durationMs < 0) return "-";
+
+  const hours = Math.floor(durationMs / 3600000);
+  const minutes = Math.floor((durationMs % 3600000) / 60000);
+  const seconds = Math.floor((durationMs % 60000) / 1000);
+  const milliseconds = durationMs % 1000;
+  const parts = [];
+  if (hours) parts.push(`${hours} 小时`);
+  if (hours || minutes) parts.push(`${minutes} 分`);
+  parts.push(`${seconds}.${String(milliseconds).padStart(3, "0")} 秒`);
+  return parts.join(" ");
 }
 
 function escapeHTML(value) {
