@@ -115,7 +115,7 @@ class ImageUploadPromptFlowTests(unittest.IsolatedAsyncioTestCase):
                 events.append("click_send")
 
         async def record_type(_page, text: str) -> None:
-            self.assertEqual(text, "生图 draw a cat")
+            self.assertEqual(text, "draw a cat")
             events.append("type_prompt")
 
         with (

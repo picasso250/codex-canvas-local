@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	daemonPort    = 53166
-	daemonHost    = "127.0.0.1"
-	daemonProbeTO = 1 * time.Second
+	daemonPort      = 53166
+	daemonHost      = "127.0.0.1"
+	daemonProbeTO   = 1 * time.Second
+	picPromptPrefix = "生成图片 "
 )
 
 var daemonScriptPath = filepath.Join("scripts", "chatgpt_agent.py")
@@ -39,6 +40,10 @@ type picAskResponse struct {
 	RequestID  string   `json:"request_id"`
 	Code       string   `json:"code"`
 	Message    string   `json:"message"`
+}
+
+func daemonPicPrompt(prompt string) string {
+	return picPromptPrefix + prompt
 }
 
 func (s *server) handlePicJobs(w http.ResponseWriter, r *http.Request) {
@@ -397,7 +402,7 @@ func (s *server) runPicJob(j *job, imagePaths []string) {
 	}
 
 	req := picAskRequest{
-		Prompt:        j.Prompt,
+		Prompt:        daemonPicPrompt(j.Prompt),
 		Timeout:       180.0,
 		StableSeconds: 5.0,
 		Images:        imagePaths,

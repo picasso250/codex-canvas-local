@@ -393,12 +393,10 @@ class ChatGPTAgent:
                 await self.start_image_upload(page, job.images)
                 await asyncio.sleep(0.1)
 
-            # Type prompt with "生图" prefix
-            full_prompt = "生图 " + job.prompt
             before_turns = await turn_count(page)
             before_assistant_count = len(await assistant_messages(page))
             await click_element_center(page, "#prompt-textarea")
-            await type_like_user(page, full_prompt)
+            await type_like_user(page, job.prompt)
 
             if job.images:
                 await self.wait_for_image_upload(page)

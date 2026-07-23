@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+func TestDaemonPicPromptAddsGenerationPrefix(t *testing.T) {
+	if got := daemonPicPrompt("draw a cabin"); got != "生成图片 draw a cabin" {
+		t.Fatalf("daemonPicPrompt() = %q", got)
+	}
+}
+
 func TestNewAuditEventUsesAccessHeaders(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/work/jobs", nil)
 	req.RemoteAddr = "127.0.0.1:54321"
