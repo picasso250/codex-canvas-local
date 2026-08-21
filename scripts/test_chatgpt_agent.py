@@ -1,8 +1,9 @@
 import asyncio
 import importlib.util
+import json
 import sys
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("chatgpt_agent.py")
@@ -11,6 +12,96 @@ assert SPEC and SPEC.loader
 agent = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = agent
 SPEC.loader.exec_module(agent)
+
+
+class BrowserEndpointTests(unittest.TestCase):
+    def test_reads_browser_websocket_from_json_version(self):
+        response = MagicMock()
+        response.read.return_value = json.dumps(
+            {"webSocketDebuggerUrl": "ws://localhost:9222/devtools/browser/test-browser-id"}
+        ).encode("utf-8")
+        response.__enter__.return_value = response
+
+        with patch.object(agent, "urlopen", return_value=response) as open_mock:
+            self.assertEqual(
+                agent.browser_ws_endpoint("http://127.0.0.1:9222"),
+                "ws://127.0.0.1:9222/devtools/browser/test-browser-id",
+            )
+        open_mock.assert_called_once_with("http://127.0.0.1:9222/json/version", timeout=5)
+
+    def test_rejects_json_version_without_browser_websocket(self):
+        response = MagicMock()
+        response.read.return_value = b"{}"
+        response.__enter__.return_value = response
+
+        with patch.object(agent, "urlopen", return_value=response):
+            with self.assertRaises(agent.AgentError) as raised:
+                agent.browser_ws_endpoint("http://127.0.0.1:9222")
+
+        self.assertEqual(raised.exception.code, "cdp_missing_ws")
+
+
+class ConversationUrlTests(unittest.IsolatedAsyncioTestCase):
+    def test_only_accepts_persisted_conversation_route(self):
+        self.assertTrue(agent.is_conversation_url("https://chatgpt.com/c/test-id"))
+        self.assertTrue(agent.is_conversation_url("https://chatgpt.com/c/test-id?model=gpt-5"))
+        self.assertFalse(agent.is_conversation_url("https://chatgpt.com/"))
+        self.assertFalse(agent.is_conversation_url("https://chatgpt.com/web:test-id"))
+
+    async def test_ignores_temporary_route_and_returns_conversation_url(self):
+        page = FakePage("https://chatgpt.com/")
+        observed: list[str] = []
+
+        async def send_action() -> None:
+            page.emit_navigation("https://chatgpt.com/web:test-id")
+            page.url = "https://chatgpt.com/c/test-id"
+            page.emit_navigation(page.url)
+            page.url = "https://chatgpt.com/"
+
+        result = await agent.wait_for_conversation_url(page, send_action, observed.append)
+
+        self.assertEqual(result, "https://chatgpt.com/c/test-id")
+        self.assertEqual(page.url, "https://chatgpt.com/")
+        self.assertEqual(
+            observed,
+            [
+                "https://chatgpt.com/",
+                "https://chatgpt.com/web:test-id",
+                "https://chatgpt.com/c/test-id",
+            ],
+        )
+
+
+class PlaywrightLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_uses_started_playwright_object(self):
+        chatgpt_agent = agent.ChatGPTAgent("https://chatgpt.com/")
+        started_playwright = MagicMock()
+        started_playwright.stop = AsyncMock()
+        chatgpt_agent.playwright_manager = MagicMock()
+        chatgpt_agent.playwright = started_playwright
+
+        await chatgpt_agent.stop()
+
+        started_playwright.stop.assert_awaited_once_with()
+        self.assertIsNone(chatgpt_agent.playwright_manager)
+        self.assertIsNone(chatgpt_agent.playwright)
+
+    async def test_reset_stops_old_playwright_and_starts_a_new_one(self):
+        chatgpt_agent = agent.ChatGPTAgent("https://chatgpt.com/")
+        old_playwright = MagicMock()
+        old_playwright.stop = AsyncMock()
+        new_playwright = MagicMock()
+        new_manager = MagicMock()
+        new_manager.start = AsyncMock(return_value=new_playwright)
+        chatgpt_agent.playwright = old_playwright
+
+        with patch.object(agent, "async_playwright", return_value=new_manager):
+            await chatgpt_agent.reset_browser()
+
+        old_playwright.stop.assert_awaited_once_with()
+        new_manager.start.assert_awaited_once_with()
+        self.assertIs(chatgpt_agent.playwright_manager, new_manager)
+        self.assertIs(chatgpt_agent.playwright, new_playwright)
 
 
 class ImagegenStateReadyTests(unittest.TestCase):
@@ -50,6 +141,22 @@ class FakePage:
         self.url = url
         self.closed = False
         self.visited_url = None
+        self.main_frame = self
+        self.listeners: dict[str, list] = {}
+
+    def on(self, event: str, handler) -> None:
+        self.listeners.setdefault(event, []).append(handler)
+
+    def remove_listener(self, event: str, handler) -> None:
+        self.listeners[event].remove(handler)
+
+    def emit_navigation(self, url: str) -> None:
+        self.url = url
+        for handler in list(self.listeners.get("framenavigated", [])):
+            handler(self)
+
+    async def evaluate(self, _expression, *_args):
+        return {"visibility": "visible", "focused": True}
 
     async def close(self) -> None:
         self.closed = True
@@ -76,11 +183,7 @@ class ImageUploadPromptFlowTests(unittest.IsolatedAsyncioTestCase):
         page = FakePage("about:blank")
         context = FakeContext(page)
         browser = type("FakeBrowser", (), {"contexts": [context]})()
-        chatgpt_agent = agent.ChatGPTAgent(
-            "http://127.0.0.1:9222",
-            "https://chatgpt.com/",
-            mode="always_new",
-        )
+        chatgpt_agent = agent.ChatGPTAgent("https://chatgpt.com/")
         chatgpt_agent.ensure_browser = AsyncMock(return_value=browser)
         chatgpt_agent.start_image_upload = AsyncMock(
             side_effect=lambda *_: events.append("start_upload")
@@ -98,7 +201,6 @@ class ImageUploadPromptFlowTests(unittest.IsolatedAsyncioTestCase):
         job = agent.Job(
             request_id="request-1",
             prompt="draw a cat",
-            timeout=180.0,
             stable_seconds=5.0,
             images=["reference.png"],
             workdir="",
@@ -118,6 +220,11 @@ class ImageUploadPromptFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(text, "draw a cat")
             events.append("type_prompt")
 
+        async def record_url_wait(_page, send_action, _on_url) -> str:
+            events.append("wait_conversation_url")
+            await send_action()
+            return "https://chatgpt.com/c/test-id"
+
         with (
             patch.object(agent, "stable_wait", new=AsyncMock()),
             patch.object(agent.asyncio, "sleep", new=record_sleep),
@@ -125,6 +232,12 @@ class ImageUploadPromptFlowTests(unittest.IsolatedAsyncioTestCase):
             patch.object(agent, "assistant_messages", new=AsyncMock(return_value=[])),
             patch.object(agent, "click_element_center", new=record_click),
             patch.object(agent, "type_like_user", new=record_type),
+            patch.object(
+                agent,
+                "wait_for_conversation_url",
+                new=AsyncMock(side_effect=record_url_wait),
+            ),
+            patch.object(chatgpt_agent, "report_progress"),
         ):
             result = await chatgpt_agent.handle_ask_once(job)
 
@@ -139,6 +252,7 @@ class ImageUploadPromptFlowTests(unittest.IsolatedAsyncioTestCase):
                 "type_prompt",
                 "wait_upload",
                 "sleep:0.1",
+                "wait_conversation_url",
                 "click_send",
                 "wait_generation",
                 "sleep:0.1",
@@ -153,7 +267,7 @@ class ImagegenRecoveryTests(unittest.IsolatedAsyncioTestCase):
         recovery_page = FakePage("about:blank")
         context = FakeContext(recovery_page)
         browser = type("FakeBrowser", (), {"contexts": [context]})()
-        chatgpt_agent = agent.ChatGPTAgent("http://127.0.0.1:9222", "https://chatgpt.com/")
+        chatgpt_agent = agent.ChatGPTAgent("https://chatgpt.com/")
         chatgpt_agent.ensure_browser = AsyncMock(return_value=browser)
         timeout = agent.AgentError("response_timeout", "timeout")
 
@@ -171,7 +285,7 @@ class ImagegenRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 original_page,
                 before_turn_count=0,
                 before_assistant_count=0,
-                timeout_seconds=180.0,
+                conversation_url="https://chatgpt.com/c/test",
             )
 
         self.assertIs(page, recovery_page)
@@ -186,7 +300,7 @@ class ImagegenRecoveryTests(unittest.IsolatedAsyncioTestCase):
         recovery_page = FakePage("about:blank")
         context = FakeContext(recovery_page)
         browser = type("FakeBrowser", (), {"contexts": [context]})()
-        chatgpt_agent = agent.ChatGPTAgent("http://127.0.0.1:9222", "https://chatgpt.com/")
+        chatgpt_agent = agent.ChatGPTAgent("https://chatgpt.com/")
         chatgpt_agent.ensure_browser = AsyncMock(return_value=browser)
         timeout = agent.AgentError("response_timeout", "timeout")
 
@@ -200,7 +314,7 @@ class ImagegenRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     original_page,
                     before_turn_count=0,
                     before_assistant_count=0,
-                    timeout_seconds=180.0,
+                    conversation_url="https://chatgpt.com/c/test",
                 )
 
 

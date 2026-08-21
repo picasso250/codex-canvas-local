@@ -89,7 +89,7 @@ $err = Join-Path $ProjectRoot "tmp\chatgpt-agent.err.log"
 Remove-Item -LiteralPath $out, $err -ErrorAction SilentlyContinue
 
 $python = (Get-Command python).Source
-$arguments = @("scripts\chatgpt_agent.py", "serve", "--host", "127.0.0.1", "--port", "53166", "--mode", "always_new")
+$arguments = @("scripts\chatgpt_agent.py", "serve", "--host", "127.0.0.1", "--port", "53166")
 Write-Host "Starting chatgpt_agent.py"
 Start-Process -FilePath $python `
     -ArgumentList $arguments `

@@ -25,21 +25,30 @@ const (
 var daemonScriptPath = filepath.Join("scripts", "chatgpt_agent.py")
 
 type picAskRequest struct {
+	RequestID     string   `json:"request_id"`
 	Prompt        string   `json:"prompt"`
-	Timeout       float64  `json:"timeout"`
 	StableSeconds float64  `json:"stable_seconds"`
 	Images        []string `json:"images"`
 	Workdir       string   `json:"workdir"`
 }
 
+type picDaemonProgress struct {
+	Seq            int     `json:"seq"`
+	RequestID      string  `json:"request_id"`
+	Stage          string  `json:"stage"`
+	Message        string  `json:"message"`
+	ElapsedSeconds float64 `json:"elapsed_seconds"`
+}
+
 type picAskResponse struct {
-	OK         bool     `json:"ok"`
-	Response   string   `json:"response"`
-	Images     []string `json:"images"`
-	CurrentURL string   `json:"current_url"`
-	RequestID  string   `json:"request_id"`
-	Code       string   `json:"code"`
-	Message    string   `json:"message"`
+	OK         bool                `json:"ok"`
+	Response   string              `json:"response"`
+	Images     []string            `json:"images"`
+	CurrentURL string              `json:"current_url"`
+	RequestID  string              `json:"request_id"`
+	Code       string              `json:"code"`
+	Message    string              `json:"message"`
+	Progress   []picDaemonProgress `json:"progress"`
 }
 
 func daemonPicPrompt(prompt string) string {
@@ -402,8 +411,8 @@ func (s *server) runPicJob(j *job, imagePaths []string) {
 	}
 
 	req := picAskRequest{
+		RequestID:     j.ID,
 		Prompt:        daemonPicPrompt(j.Prompt),
-		Timeout:       180.0,
 		StableSeconds: 5.0,
 		Images:        imagePaths,
 		Workdir:       picWorkDir,
@@ -412,7 +421,15 @@ func (s *server) runPicJob(j *job, imagePaths []string) {
 
 	s.appendLog(j, "Sending request to daemon on :%d...\n", daemonPort)
 
+	progressStop := make(chan struct{})
+	progressStopped := make(chan struct{})
+	go func() {
+		defer close(progressStopped)
+		s.relayDaemonProgress(j, progressStop)
+	}()
 	resp, err := daemonPost("/ask", reqBody)
+	close(progressStop)
+	<-progressStopped
 	if err != nil {
 		s.failJob(j, fmt.Errorf("daemon request: %w", err))
 		return
@@ -478,11 +495,41 @@ func daemonProbe() bool {
 	return resp.OK && resp.Code == ""
 }
 
+func (s *server) relayDaemonProgress(j *job, stop <-chan struct{}) {
+	lastSeq := 0
+	poll := func() {
+		resp, err := daemonGet("/status")
+		if err != nil {
+			return
+		}
+		for _, event := range resp.Progress {
+			if event.RequestID != j.ID || event.Seq <= lastSeq {
+				continue
+			}
+			message := strings.ReplaceAll(strings.TrimSpace(event.Message), "\n", " ")
+			s.appendLog(j, "[agent +%.1fs] %s: %s\n", event.ElapsedSeconds, event.Stage, message)
+			lastSeq = event.Seq
+		}
+	}
+
+	poll()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			poll()
+		case <-stop:
+			poll()
+			return
+		}
+	}
+}
+
 func daemonStart() error {
 	cmd := exec.Command("python", daemonScriptPath, "serve",
 		"--host", daemonHost,
 		"--port", fmt.Sprintf("%d", daemonPort),
-		"--mode", "always_new",
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} // CREATE_NO_WINDOW
 	cmd.Stdin = nil
@@ -570,7 +617,7 @@ func newAuditPicEvent(r *http.Request, j *job, imagePaths []string) auditEvent {
 		UserAgent:   strings.TrimSpace(r.UserAgent()),
 		CFRay:       strings.TrimSpace(r.Header.Get("Cf-Ray")),
 		Prompt:      j.Prompt,
-		CodexArgs:   append([]string{"chatgpt_agent.py", "serve", "--mode", "always_new"}, imagePaths...),
+		CodexArgs:   append([]string{"chatgpt_agent.py", "serve"}, imagePaths...),
 		CodexPrompt: j.Prompt,
 		WorkDir:     j.WorkDir,
 	}
@@ -583,7 +630,7 @@ func newAuditPicDaemonErrorEvent(j *job, resp *picAskResponse) auditEvent {
 		CreatedAt:        time.Now(),
 		Email:            j.Email,
 		Prompt:           j.Prompt,
-		CodexArgs:        []string{"chatgpt_agent.py", "serve", "--mode", "always_new"},
+		CodexArgs:        []string{"chatgpt_agent.py", "serve"},
 		CodexPrompt:      j.Prompt,
 		WorkDir:          j.WorkDir,
 		Status:           "failed",
@@ -603,7 +650,7 @@ func newAuditPicFinishedEvent(j *job) auditEvent {
 		FinishedAt:  status.FinishedAt,
 		Email:       j.Email,
 		Prompt:      status.Prompt,
-		CodexArgs:   []string{"chatgpt_agent.py", "serve", "--mode", "always_new"},
+		CodexArgs:   []string{"chatgpt_agent.py", "serve"},
 		CodexPrompt: status.Prompt,
 		WorkDir:     status.WorkDir,
 		Status:      status.Status,

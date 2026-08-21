@@ -11,11 +11,11 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from playwright.async_api import Browser, Page, async_playwright
+from playwright.async_api import Browser, Error as PlaywrightError, Page, async_playwright
 
 
 DEFAULT_CDP = "http://127.0.0.1:9222"
@@ -26,6 +26,7 @@ SERVICE_ID = "imagegen-daemon"
 PROVIDER_ID = "imagegen"
 IMAGEGEN_TAB_RECOVERY_SECONDS = 60.0
 IMAGEGEN_RECOVERY_WAIT_SECONDS = 120.0
+CONVERSATION_URL_TIMEOUT_SECONDS = 30.0
 
 
 class AgentError(Exception):
@@ -39,7 +40,6 @@ class AgentError(Exception):
 class Job:
     request_id: str
     prompt: str
-    timeout: float
     stable_seconds: float
     images: list[str]
     workdir: str
@@ -84,8 +84,62 @@ def browser_ws_endpoint(cdp_url: str) -> str:
         payload = json.loads(response.read().decode("utf-8"))
     endpoint = payload.get("webSocketDebuggerUrl")
     if not endpoint:
-        raise AgentError("cdp_missing_ws", "Chrome DevTools did not return webSocketDebuggerUrl.")
+        raise AgentError("cdp_missing_ws", "Chromium DevTools did not return webSocketDebuggerUrl.")
     return endpoint.replace("ws://localhost:", "ws://127.0.0.1:")
+
+
+def is_conversation_url(url: str) -> bool:
+    path = url.split("?", 1)[0].split("#", 1)[0]
+    prefix = "https://chatgpt.com/c/"
+    return path.startswith(prefix) and len(path) > len(prefix)
+
+
+async def wait_for_conversation_url(
+    page: Page,
+    send_action: Callable[[], Awaitable[None]],
+    on_url: Callable[[str], None] | None = None,
+) -> str:
+    loop = asyncio.get_running_loop()
+    conversation_url: asyncio.Future[str] = loop.create_future()
+    observed_urls: list[str] = []
+
+    def observe(url: str) -> None:
+        candidate = str(url)
+        if candidate not in observed_urls:
+            observed_urls.append(candidate)
+            if on_url:
+                on_url(candidate)
+        if is_conversation_url(candidate) and not conversation_url.done():
+            conversation_url.set_result(candidate)
+
+    def on_frame_navigated(frame: Any) -> None:
+        if frame == page.main_frame:
+            observe(frame.url)
+
+    page.on("framenavigated", on_frame_navigated)
+    observe(page.url)
+    deadline = time.monotonic() + CONVERSATION_URL_TIMEOUT_SECONDS
+    try:
+        await send_action()
+        while not conversation_url.done():
+            observe(page.url)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                seen = " -> ".join(observed_urls) or "<none>"
+                raise AgentError(
+                    "conversation_url_timeout",
+                    f"Timed out waiting for ChatGPT conversation URL; observed: {seen}",
+                )
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(conversation_url),
+                    timeout=min(0.1, remaining),
+                )
+            except asyncio.TimeoutError:
+                continue
+        return conversation_url.result()
+    finally:
+        page.remove_listener("framenavigated", on_frame_navigated)
 
 
 async def assistant_messages(page: Page) -> list[str]:
@@ -221,10 +275,13 @@ async def wait_for_imagegen(
 
 
 class ChatGPTAgent:
-    def __init__(self, cdp_url: str, target_url: str, mode: str = "reuse") -> None:
-        self.cdp_url = cdp_url
+    def __init__(
+        self,
+        target_url: str,
+        cdp_url: str = DEFAULT_CDP,
+    ) -> None:
         self.target_url = target_url
-        self.mode = mode
+        self.cdp_url = cdp_url
         self.queue: asyncio.Queue[Job] = asyncio.Queue()
         self.browser: Browser | None = None
         self.page: Page | None = None
@@ -232,8 +289,28 @@ class ChatGPTAgent:
         self.playwright = None
         self.action_lock = asyncio.Lock()
         self.running_request_id: str | None = None
+        self.current_job: Job | None = None
         self.last_error: dict[str, Any] | None = None
         self.started_at = time.time()
+        self.progress: list[dict[str, Any]] = []
+        self.progress_seq = 0
+        self.progress_started_at: float | None = None
+
+    def report_progress(self, job: Job, stage: str, message: str) -> None:
+        self.progress_seq += 1
+        elapsed = 0.0
+        if self.progress_started_at is not None:
+            elapsed = time.monotonic() - self.progress_started_at
+        event = {
+            "seq": self.progress_seq,
+            "request_id": job.request_id,
+            "stage": stage,
+            "message": message,
+            "elapsed_seconds": round(elapsed, 3),
+        }
+        self.progress.append(event)
+        self.progress = self.progress[-200:]
+        print(json.dumps({"event": "agent_progress", **event}, ensure_ascii=False), flush=True)
 
     async def start(self) -> None:
         self.playwright_manager = async_playwright()
@@ -241,21 +318,20 @@ class ChatGPTAgent:
         asyncio.create_task(self.worker())
 
     async def stop(self) -> None:
-        if self.browser:
-            await self.browser.close()
-        if self.playwright_manager:
-            await self.playwright_manager.stop()
+        self.browser = None
+        self.page = None
+        if self.playwright:
+            await self.playwright.stop()
+        self.playwright_manager = None
         self.playwright = None
 
     async def reset_browser(self) -> None:
-        browser = self.browser
         self.browser = None
         self.page = None
-        if browser:
-            try:
-                await browser.close()
-            except Exception:
-                pass
+        if self.playwright:
+            await self.playwright.stop()
+            self.playwright_manager = async_playwright()
+            self.playwright = await self.playwright_manager.start()
 
     async def ensure_browser(self) -> Browser:
         if self.browser:
@@ -274,36 +350,22 @@ class ChatGPTAgent:
             return self.browser
         except (HTTPError, URLError, OSError) as exc:
             await self.reset_browser()
-            raise AgentError("cdp_unavailable", f"Chrome DevTools is unavailable at {self.cdp_url}: {exc}") from exc
+            raise AgentError(
+                "cdp_unavailable",
+                f"Chromium DevTools is unavailable at {self.cdp_url}: {exc}",
+            ) from exc
+        except AgentError:
+            await self.reset_browser()
+            raise
+        except PlaywrightError as exc:
+            await self.reset_browser()
+            raise AgentError(
+                "cdp_unavailable",
+                f"Chromium remote debugging connection failed via {self.cdp_url}: {exc}",
+            ) from exc
         except Exception:
             await self.reset_browser()
             raise
-
-    async def find_or_open_page(self) -> Page:
-        browser = await self.ensure_browser()
-        chatgpt_page: Page | None = None
-        for context in browser.contexts:
-            for page in context.pages:
-                if page.is_closed():
-                    continue
-                if page.url == self.target_url:
-                    return page
-                if page.url.startswith("https://chatgpt.com/") and "/codex/" not in page.url:
-                    chatgpt_page = chatgpt_page or page
-        if chatgpt_page:
-            return chatgpt_page
-
-        context = browser.contexts[0] if browser.contexts else await browser.new_context()
-        page = await context.new_page()
-        await page.goto(self.target_url)
-        await stable_wait()
-        return page
-
-    async def ensure_page(self) -> Page:
-        if self.page and not self.page.is_closed():
-            return self.page
-        self.page = await self.find_or_open_page()
-        return self.page
 
     async def new_chat(self) -> dict[str, Any]:
         async with self.action_lock:
@@ -320,12 +382,11 @@ class ChatGPTAgent:
             finally:
                 self.running_request_id = None
 
-    async def enqueue_ask(self, prompt: str, timeout: float, stable_seconds: float, images: list[str] | None = None, workdir: str | None = None) -> dict[str, Any]:
+    async def enqueue_ask(self, request_id: str, prompt: str, stable_seconds: float, images: list[str] | None = None, workdir: str | None = None) -> dict[str, Any]:
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         job = Job(
-            request_id=str(uuid.uuid4()),
+            request_id=request_id,
             prompt=prompt,
-            timeout=timeout,
             stable_seconds=stable_seconds,
             images=images or [],
             workdir=workdir or "",
@@ -338,20 +399,29 @@ class ChatGPTAgent:
         while True:
             job = await self.queue.get()
             self.running_request_id = job.request_id
+            self.current_job = job
+            self.progress = []
+            self.progress_seq = 0
+            self.progress_started_at = time.monotonic()
+            self.report_progress(job, "started", "Agent started processing the request.")
             try:
                 result = await self.handle_ask(job)
                 self.last_error = None
+                self.report_progress(job, "completed", "Request completed successfully.")
                 job.future.set_result(result)
             except AgentError as exc:
+                self.report_progress(job, "failed", f"{exc.code}: {exc.message}")
                 error = self.error_payload(exc.code, exc.message, job.request_id)
                 self.last_error = error
                 job.future.set_result(error)
             except Exception as exc:
+                self.report_progress(job, "failed", f"unexpected_error: {exc}")
                 error = self.error_payload("unexpected_error", str(exc), job.request_id)
                 self.last_error = error
                 job.future.set_result(error)
             finally:
                 self.running_request_id = None
+                self.current_job = None
                 self.queue.task_done()
 
     async def handle_ask(self, job: Job) -> dict[str, Any]:
@@ -374,22 +444,30 @@ class ChatGPTAgent:
 
     async def handle_ask_once(self, job: Job) -> dict[str, Any]:
         async with self.action_lock:
+            self.report_progress(job, "browser_connect", "Connecting to Chromium over CDP.")
             browser = await self.ensure_browser()
-            if self.mode == "always_new":
-                context = browser.contexts[0] if browser.contexts else await browser.new_context()
-                page = await context.new_page()
-                await page.goto(self.target_url)
-                self.page = page
-            else:
-                page = await self.ensure_page()
+            context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            page = await context.new_page()
+            self.report_progress(job, "page_created", "Created a fresh ChatGPT tab.")
+            await page.goto(self.target_url)
+            self.page = page
 
             await page.bring_to_front()
             await stable_wait()
             await asyncio.sleep(1.0)
+            page_state = await page.evaluate(
+                "() => ({ visibility: document.visibilityState, focused: document.hasFocus() })"
+            )
+            self.report_progress(
+                job,
+                "page_ready",
+                f"ChatGPT page ready at {page.url}; visibility={page_state.get('visibility')}; focused={page_state.get('focused')}.",
+            )
 
             # Start uploading reference images, then type while the browser upload continues.
             saved_images: list[str] = []
             if job.images:
+                self.report_progress(job, "upload_started", f"Uploading {len(job.images)} reference image(s).")
                 await self.start_image_upload(page, job.images)
                 await asyncio.sleep(0.1)
 
@@ -397,26 +475,41 @@ class ChatGPTAgent:
             before_assistant_count = len(await assistant_messages(page))
             await click_element_center(page, "#prompt-textarea")
             await type_like_user(page, job.prompt)
+            self.report_progress(job, "prompt_typed", f"Typed {len(job.prompt)} prompt character(s).")
 
             if job.images:
                 await self.wait_for_image_upload(page)
+                self.report_progress(job, "upload_completed", "Reference image upload completed.")
             await asyncio.sleep(0.1)
 
             send_selector = (
                 'button[data-testid="send-button"], '
                 'button[aria-label*="Send"], button[aria-label*="发送"]'
             )
-            await click_element_center(page, send_selector)
+            self.report_progress(job, "url_wait_armed", "Armed conversation URL listener before clicking Send.")
+
+            async def send_prompt() -> None:
+                await click_element_center(page, send_selector)
+                self.report_progress(job, "send_clicked", "Clicked the Send button.")
+
+            conversation_url = await wait_for_conversation_url(
+                page,
+                send_prompt,
+                lambda url: self.report_progress(job, "url_observed", f"Observed URL: {url}"),
+            )
+            self.report_progress(job, "url_captured", f"Captured conversation URL: {conversation_url}")
             page, response = await self.wait_for_imagegen_with_tab_recovery(
                 page,
                 before_turns,
                 before_assistant_count,
-                job.timeout,
+                conversation_url,
             )
             await asyncio.sleep(0.1)
 
             # Download generated images
+            self.report_progress(job, "download_started", "Downloading generated image(s).")
             saved_images = await self.download_images(page, job.workdir)
+            self.report_progress(job, "download_completed", f"Saved {len(saved_images)} generated image(s).")
 
             return {
                 "ok": True,
@@ -431,24 +524,27 @@ class ChatGPTAgent:
         page: Page,
         before_turn_count: int,
         before_assistant_count: int,
-        timeout_seconds: float,
+        conversation_url: str,
     ) -> tuple[Page, str]:
-        first_wait = min(timeout_seconds, IMAGEGEN_TAB_RECOVERY_SECONDS)
+        job = self.current_job
+        if job:
+            self.report_progress(job, "generation_wait", "Waiting up to 60 seconds for generated images.")
         try:
             response = await wait_for_imagegen(
                 page,
                 before_turn_count,
                 before_assistant_count,
-                first_wait,
+                IMAGEGEN_TAB_RECOVERY_SECONDS,
             )
+            if job:
+                self.report_progress(job, "generation_ready", "Generated images became ready in the original tab.")
             return page, response
         except AgentError as exc:
-            if exc.code != "response_timeout" or timeout_seconds <= first_wait:
+            if exc.code != "response_timeout":
                 raise
 
-        recovery_url = page.url
-        if not recovery_url or recovery_url == "about:blank":
-            raise AgentError("response_timeout", "Timed out waiting for image generation to complete.")
+        if job:
+            self.report_progress(job, "recovery_started", "No ready image after 60 seconds; reopening the captured conversation URL.")
 
         try:
             await page.close()
@@ -459,21 +555,22 @@ class ChatGPTAgent:
         context = browser.contexts[0] if browser.contexts else await browser.new_context()
         recovery_page = await context.new_page()
         self.page = recovery_page
-        await recovery_page.goto(recovery_url)
+        await recovery_page.goto(conversation_url)
         await recovery_page.bring_to_front()
         await stable_wait()
+        if job:
+            self.report_progress(job, "recovery_page_ready", f"Recovery page loaded: {conversation_url}")
+            self.report_progress(job, "recovery_wait", "Waiting up to 120 seconds in the recovery page.")
 
-        recovery_wait = min(
-            max(timeout_seconds - first_wait, 0.0),
-            IMAGEGEN_RECOVERY_WAIT_SECONDS,
-        )
         try:
             response = await wait_for_imagegen(
                 recovery_page,
                 before_turn_count,
                 before_assistant_count,
-                recovery_wait,
+                IMAGEGEN_RECOVERY_WAIT_SECONDS,
             )
+            if job:
+                self.report_progress(job, "generation_ready", "Generated images became ready in the recovery page.")
             return recovery_page, response
         except AgentError as exc:
             if exc.code != "response_timeout":
@@ -555,12 +652,13 @@ class ChatGPTAgent:
             "ok": True,
             "service": SERVICE_ID,
             "provider": PROVIDER_ID,
-            "mode": self.mode,
+            "cdp_url": self.cdp_url,
             "busy": self.running_request_id is not None,
             "running_request_id": self.running_request_id,
             "queue_length": self.queue.qsize(),
             "current_url": current_url,
             "last_error": self.last_error,
+            "progress": list(self.progress),
             "uptime_seconds": round(time.time() - self.started_at, 3),
         }
 
@@ -615,11 +713,13 @@ async def handle_http_client(agent: ChatGPTAgent, reader: asyncio.StreamReader, 
             prompt = str(data.get("prompt", ""))
             if not prompt:
                 raise AgentError("bad_request", "Missing prompt.")
-            timeout = float(data.get("timeout", 180.0))
+            request_id = str(data.get("request_id", "")).strip()
+            if not request_id:
+                raise AgentError("bad_request", "Missing request_id.")
             stable_seconds = float(data.get("stable_seconds", 5.0))
             images = [str(p) for p in data.get("images", []) or []]
             workdir = str(data.get("workdir", ""))
-            payload = await agent.enqueue_ask(prompt, timeout, stable_seconds, images, workdir)
+            payload = await agent.enqueue_ask(request_id, prompt, stable_seconds, images, workdir)
         elif method == "POST" and path == "/new-chat":
             payload = await agent.new_chat()
         else:
@@ -638,7 +738,7 @@ async def handle_http_client(agent: ChatGPTAgent, reader: asyncio.StreamReader, 
 
 
 async def serve(args: argparse.Namespace) -> None:
-    agent = ChatGPTAgent(args.cdp_url, args.url, mode=getattr(args, "mode", "reuse"))
+    agent = ChatGPTAgent(args.url, args.cdp_url)
     server = await asyncio.start_server(
         lambda reader, writer: handle_http_client(agent, reader, writer),
         args.host,
@@ -700,15 +800,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     serve_parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     serve_parser.add_argument("--cdp-url", default=DEFAULT_CDP)
     serve_parser.add_argument("--url", default=DEFAULT_CHATGPT_URL)
-    serve_parser.add_argument("--mode", choices=["reuse", "always_new"], default="reuse",
-                              help="Tab reuse mode: reuse (default) or always_new.")
 
     ask_parser = subparsers.add_parser("ask", help="Send one prompt through the daemon.")
     ask_parser.add_argument("--host", default=DEFAULT_HOST)
     ask_parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     ask_parser.add_argument("prompt", nargs="?", help="Prompt text. Omit when using --prompt-file.")
     ask_parser.add_argument("--prompt-file", help="Read prompt text from this UTF-8 file.")
-    ask_parser.add_argument("--timeout", type=float, default=180.0)
     ask_parser.add_argument("--stable-seconds", type=float, default=5.0)
     ask_parser.add_argument("--images", nargs="*", default=[], help="Local image paths to upload as reference.")
     ask_parser.add_argument("--workdir", default="", help="Directory to save generated images.")
@@ -746,7 +843,7 @@ def main(argv: list[str]) -> int:
         payload = request_json(
             "POST",
             "/ask",
-            {"prompt": prompt, "timeout": args.timeout, "stable_seconds": args.stable_seconds,
+            {"request_id": str(uuid.uuid4()), "prompt": prompt, "stable_seconds": args.stable_seconds,
              "images": args.images, "workdir": args.workdir},
             args.host,
             args.port,
