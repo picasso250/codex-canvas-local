@@ -43,31 +43,37 @@ class BrowserEndpointTests(unittest.TestCase):
 
 class ConversationUrlTests(unittest.IsolatedAsyncioTestCase):
     def test_only_accepts_persisted_conversation_route(self):
-        self.assertTrue(agent.is_conversation_url("https://chatgpt.com/c/test-id"))
-        self.assertTrue(agent.is_conversation_url("https://chatgpt.com/c/test-id?model=gpt-5"))
+        conversation_id = "6a895226-3f14-83ea-9440-46bf0483ac65"
+        self.assertTrue(agent.is_conversation_url(f"https://chatgpt.com/c/{conversation_id}"))
+        self.assertTrue(agent.is_conversation_url(f"https://chatgpt.com/c/{conversation_id}?model=gpt-5"))
         self.assertFalse(agent.is_conversation_url("https://chatgpt.com/"))
         self.assertFalse(agent.is_conversation_url("https://chatgpt.com/web:test-id"))
+        self.assertFalse(agent.is_conversation_url("https://chatgpt.com/c/WEB:test-id"))
+        self.assertFalse(agent.is_conversation_url("https://chatgpt.com/c/test-id"))
 
     async def test_ignores_temporary_route_and_returns_conversation_url(self):
         page = FakePage("https://chatgpt.com/")
         observed: list[str] = []
+        conversation_url = "https://chatgpt.com/c/6a895226-3f14-83ea-9440-46bf0483ac65"
 
         async def send_action() -> None:
             page.emit_navigation("https://chatgpt.com/web:test-id")
-            page.url = "https://chatgpt.com/c/test-id"
+            page.emit_navigation("https://chatgpt.com/c/WEB:test-id")
+            page.url = conversation_url
             page.emit_navigation(page.url)
             page.url = "https://chatgpt.com/"
 
         result = await agent.wait_for_conversation_url(page, send_action, observed.append)
 
-        self.assertEqual(result, "https://chatgpt.com/c/test-id")
+        self.assertEqual(result, conversation_url)
         self.assertEqual(page.url, "https://chatgpt.com/")
         self.assertEqual(
             observed,
             [
                 "https://chatgpt.com/",
                 "https://chatgpt.com/web:test-id",
-                "https://chatgpt.com/c/test-id",
+                "https://chatgpt.com/c/WEB:test-id",
+                conversation_url,
             ],
         )
 

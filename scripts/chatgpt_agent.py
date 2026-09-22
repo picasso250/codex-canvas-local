@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from playwright.async_api import Browser, Error as PlaywrightError, Page, async_playwright
@@ -89,9 +90,16 @@ def browser_ws_endpoint(cdp_url: str) -> str:
 
 
 def is_conversation_url(url: str) -> bool:
-    path = url.split("?", 1)[0].split("#", 1)[0]
-    prefix = "https://chatgpt.com/c/"
-    return path.startswith(prefix) and len(path) > len(prefix)
+    parsed = urlsplit(url)
+    prefix = "/c/"
+    if parsed.scheme != "https" or parsed.netloc != "chatgpt.com" or not parsed.path.startswith(prefix):
+        return False
+
+    conversation_id = parsed.path.removeprefix(prefix)
+    try:
+        return str(uuid.UUID(conversation_id)) == conversation_id.lower()
+    except ValueError:
+        return False
 
 
 async def wait_for_conversation_url(
@@ -347,6 +355,11 @@ class ChatGPTAgent:
         try:
             ws_endpoint = browser_ws_endpoint(self.cdp_url)
             self.browser = await self.playwright.chromium.connect_over_cdp(ws_endpoint)
+            session = await self.browser.new_browser_cdp_session()
+            try:
+                await session.send("Browser.setDownloadBehavior", {"behavior": "default"})
+            finally:
+                await session.detach()
             return self.browser
         except (HTTPError, URLError, OSError) as exc:
             await self.reset_browser()

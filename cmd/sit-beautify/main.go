@@ -88,6 +88,7 @@ func main() {
 	limit := -1
 	jpgOnly := false
 	noSkip := false
+	allSizes := false
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -105,6 +106,8 @@ func main() {
 			jpgOnly = true
 		case a == "-no-skip":
 			noSkip = true
+		case a == "-all":
+			allSizes = true
 		case a == "-limit":
 			fmt.Sscanf(next(), "%d", &limit)
 		case strings.HasPrefix(a, "-limit="):
@@ -121,7 +124,7 @@ func main() {
 		fatal("reference image not found in %s", srcDir)
 	}
 
-	photos, err := collectTargets(srcDir, jpgOnly)
+	photos, err := collectTargets(srcDir, jpgOnly, allSizes)
 	if err != nil {
 		fatal("collect targets: %v", err)
 	}
@@ -129,14 +132,22 @@ func main() {
 		fatal("no photo with size %dx%d found", targetW, targetH)
 	}
 
-	fmt.Printf("参考图（第一张）: %s\n", filepath.Base(ref))
-	fmt.Printf("待处理 %d 张（%dx%d，文件名序）:\n", len(photos), targetW, targetH)
+	if allSizes {
+		fmt.Printf("模式: -all（任意尺寸）\n")
+	} else {
+		fmt.Printf("参考图（第一张）: %s\n", filepath.Base(ref))
+	}
+	fmt.Printf("待处理 %d 张，文件名序:\n", len(photos))
 	for i, p := range photos {
 		mark := ""
 		if !noSkip && outputExists(p) {
 			mark = "  [已处理，跳过]"
 		}
 		fmt.Printf("  %2d. %s%s\n", i+1, filepath.Base(p), mark)
+	}
+
+	if !allSizes {
+		fmt.Printf("（目标尺寸 %dx%d）\n", targetW, targetH)
 	}
 
 	if dryRun {
@@ -218,8 +229,10 @@ func findReference(dir string) string {
 	return ""
 }
 
-// collectTargets 收集尺寸恰好为 targetW×targetH 的图片，按文件名（UTF-8）升序。
-func collectTargets(dir string, jpgOnly bool) ([]string, error) {
+// collectTargets 收集待处理图片，按文件名（UTF-8）升序。
+// 默认只收尺寸恰好为 targetW×targetH 的；allSizes=true 时收所有人物照片
+// （排除参考图与标注"不需要修"的）。
+func collectTargets(dir string, jpgOnly, allSizes bool) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -234,6 +247,9 @@ func collectTargets(dir string, jpgOnly bool) ([]string, error) {
 			continue
 		}
 		if strings.Contains(e.Name(), "参考") {
+			continue
+		}
+		if strings.Contains(e.Name(), "不需要修") {
 			continue
 		}
 		if jpgOnly && ext != ".jpg" && ext != ".jpeg" {
@@ -251,7 +267,7 @@ func collectTargets(dir string, jpgOnly bool) ([]string, error) {
 			fmt.Printf("  忽略 %s（解析失败: %v）\n", n, err)
 			continue
 		}
-		if w == targetW && h == targetH {
+		if allSizes || (w == targetW && h == targetH) {
 			photos = append(photos, full)
 		}
 	}
