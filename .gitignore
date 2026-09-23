@@ -1,12 +1,14 @@
 # Build outputs
 /bin/
 *.exe
+/dist/
 
 # Runtime/session data
 /data/
 /tmp/
 /runs/
 /.wrangler/
+/artflow-records/
 
 # Local smoke-test artifacts
 /smoke-*.png

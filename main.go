@@ -205,12 +205,6 @@ func main() {
 	mux.HandleFunc("/api/usage-limits", app.handleUsageLimits)
 	mux.HandleFunc("/api/pic/jobs", app.handlePicJobs)
 	mux.HandleFunc("/api/pic/jobs/", app.handlePicJob)
-	mux.HandleFunc("/api/work/jobs", app.handleWorkJobs)
-	mux.HandleFunc("/api/work/jobs/", app.handleWorkJob)
-	mux.HandleFunc("/api/work/files", app.handleWorkFiles)
-	mux.HandleFunc("/api/work/files/upload", app.handleWorkFileUpload)
-	mux.HandleFunc("/api/work/files/download", app.handleWorkFileDownload)
-	mux.HandleFunc("/api/work/files/preview", app.handleWorkFilePreview)
 
 	log.Printf("codex canvas local listening on http://%s", cfg.addr)
 	log.Fatal(http.ListenAndServe(cfg.addr, mux))
@@ -261,11 +255,9 @@ func mustStaticVersion() string {
 	h := sha256.New()
 	for _, name := range []string{
 		"static/index.html",
-		"static/work.html",
 		"static/pic.html",
 		"static/audit.html",
 		"static/app.js",
-		"static/work.js",
 		"static/pic.js",
 		"static/audit.js",
 		"static/styles.css",
@@ -319,21 +311,14 @@ func staticHandler(root fs.FS, version string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 
-		if r.URL.Path == "/" || r.URL.Path == "/index.html" || r.URL.Path == "/work" || r.URL.Path == "/work/" || r.URL.Path == "/pic" || r.URL.Path == "/pic/" {
-			name := "index.html"
-			if r.URL.Path == "/work" || r.URL.Path == "/work/" || isWorkHost(r.Host) {
-				name = "work.html"
-			} else if r.URL.Path == "/pic" || r.URL.Path == "/pic/" || isPicHost(r.Host) {
-				name = "pic.html"
-			}
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" || r.URL.Path == "/pic" || r.URL.Path == "/pic/" {
+			name := "pic.html"
 			b, err := fs.ReadFile(root, name)
 			if err != nil {
 				http.Error(w, "index not found", http.StatusInternalServerError)
 				return
 			}
 			html := strings.ReplaceAll(string(b), `href="/styles.css"`, `href="/styles.css?v=`+version+`"`)
-			html = strings.ReplaceAll(html, `src="/app.js"`, `src="/app.js?v=`+version+`"`)
-			html = strings.ReplaceAll(html, `src="/work.js"`, `src="/work.js?v=`+version+`"`)
 			html = strings.ReplaceAll(html, `src="/pic.js"`, `src="/pic.js?v=`+version+`"`)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = io.WriteString(w, html)
@@ -342,27 +327,6 @@ func staticHandler(root fs.FS, version string) http.Handler {
 
 		files.ServeHTTP(w, r)
 	})
-}
-
-func isWorkHost(host string) bool {
-	host = normalizedHost(host)
-	return host == "codex.io99.xyz"
-}
-
-func isPicHost(host string) bool {
-	host = normalizedHost(host)
-	return host == "pic.io99.xyz"
-}
-
-func normalizedHost(host string) string {
-	host = strings.ToLower(strings.TrimSpace(host))
-	if host == "" {
-		return ""
-	}
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	return host
 }
 
 func (s *server) listJobs(w http.ResponseWriter, r *http.Request, mode string) {

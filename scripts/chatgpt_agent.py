@@ -388,7 +388,7 @@ class ChatGPTAgent:
                 context = browser.contexts[0] if browser.contexts else await browser.new_context()
                 page = await context.new_page()
                 await page.goto(self.target_url)
-                await page.bring_to_front()
+                # await page.bring_to_front()
                 await stable_wait()
                 self.page = page
                 return {"ok": True, "current_url": self.page.url}
@@ -465,7 +465,7 @@ class ChatGPTAgent:
             await page.goto(self.target_url)
             self.page = page
 
-            await page.bring_to_front()
+            # await page.bring_to_front()
             await stable_wait()
             await asyncio.sleep(1.0)
             page_state = await page.evaluate(
@@ -569,7 +569,7 @@ class ChatGPTAgent:
         recovery_page = await context.new_page()
         self.page = recovery_page
         await recovery_page.goto(conversation_url)
-        await recovery_page.bring_to_front()
+        # await recovery_page.bring_to_front()
         await stable_wait()
         if job:
             self.report_progress(job, "recovery_page_ready", f"Recovery page loaded: {conversation_url}")

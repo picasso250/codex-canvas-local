@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,7 +18,7 @@ func TestDaemonPicPromptAddsGenerationPrefix(t *testing.T) {
 }
 
 func TestNewAuditEventUsesAccessHeaders(t *testing.T) {
-	req := httptest.NewRequest("POST", "/api/work/jobs", nil)
+	req := httptest.NewRequest("POST", "/api/pic/jobs", nil)
 	req.RemoteAddr = "127.0.0.1:54321"
 	req.Header.Set("Cf-Access-Authenticated-User-Email", "user@example.com")
 	req.Header.Set("Cf-Connecting-Ip", "203.0.113.10")
@@ -34,7 +32,7 @@ func TestNewAuditEventUsesAccessHeaders(t *testing.T) {
 		CreatedAt: time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC),
 	}
 
-	event := newAuditWorkEvent(req, j)
+	event := newAuditPicEvent(req, j, []string{"a.png"})
 	if event.Email != "user@example.com" {
 		t.Fatalf("email = %q", event.Email)
 	}
@@ -180,70 +178,6 @@ func TestUserWorkDirKey(t *testing.T) {
 	}
 }
 
-func TestCollectImagesDeduplicatesByHash(t *testing.T) {
-	isolateImageSearchEnv(t)
-	root := t.TempDir()
-	s := &server{root: root}
-	workDir := filepath.Join(root, "tmp", "users", "user")
-	generatedDir := filepath.Join(root, "tmp", "imagegen")
-	if err := os.MkdirAll(workDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(generatedDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	friendly := filepath.Join(workDir, "edited-detail.png")
-	defaultName := filepath.Join(generatedDir, "ig_123.png")
-	other := filepath.Join(generatedDir, "ig_456.png")
-	writeTestFile(t, friendly, []byte("same image"))
-	writeTestFile(t, defaultName, []byte("same image"))
-	writeTestFile(t, other, []byte("different image"))
-
-	j := &job{ID: "job123", UserKey: "user-readable", WorkDir: workDir}
-	images := s.collectImages(j, map[string]time.Time{}, time.Now().Add(-time.Minute))
-	if len(images) != 2 {
-		t.Fatalf("images = %#v", images)
-	}
-	if images[0].Name != "edited-detail.png" && images[1].Name != "edited-detail.png" {
-		t.Fatalf("dedupe should keep friendly name: %#v", images)
-	}
-	if !strings.HasPrefix(images[0].URL, "/runs/users/"+publicUserKey(j.UserKey)+"/outputs/job123/") {
-		t.Fatalf("image url should use public user output path: %#v", images)
-	}
-	if _, err := os.Stat(filepath.Join(workDir, "outputs", "job123", "edited-detail.png")); err != nil {
-		t.Fatalf("work output missing: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "runs", "users", publicUserKey(j.UserKey), "outputs", "job123", "edited-detail.png")); err != nil {
-		t.Fatalf("public output missing: %v", err)
-	}
-}
-
-func TestCollectImagesIncludesUpdatedPersistentFile(t *testing.T) {
-	isolateImageSearchEnv(t)
-	root := t.TempDir()
-	s := &server{root: root}
-	workDir := filepath.Join(root, "tmp", "users", "user")
-	if err := os.MkdirAll(workDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	path := filepath.Join(workDir, "output.png")
-	writeTestFile(t, path, []byte("updated image"))
-	before := map[string]time.Time{
-		path: time.Now().Add(-time.Minute),
-	}
-
-	j := &job{ID: "job123", UserKey: "user-readable", WorkDir: workDir}
-	images := s.collectImages(j, before, time.Now().Add(-time.Second))
-	if len(images) != 1 || images[0].Name != "output.png" {
-		t.Fatalf("images = %#v", images)
-	}
-	if _, err := os.Stat(filepath.Join(workDir, "outputs", "job123", "output.png")); err != nil {
-		t.Fatalf("work output missing: %v", err)
-	}
-}
-
 func TestListJobsFiltersByUser(t *testing.T) {
 	s := &server{jobs: map[string]*job{}}
 	userReq := httptest.NewRequest("GET", "/api/work/jobs", nil)
@@ -347,18 +281,11 @@ func TestJobStorePersistsJobsAndImages(t *testing.T) {
 	}
 }
 
-func TestBuildCodexPromptWorkModePassesThrough(t *testing.T) {
-	j := &job{Mode: "work", Prompt: "inspect files"}
-	if got := buildCodexPrompt(j); got != "inspect files" {
-		t.Fatalf("prompt = %q", got)
-	}
-}
-
 func TestSubmittedNotificationIncludesEmailAndFullPrompt(t *testing.T) {
 	prompt := "line one\nline two\n完整提示词"
 	j := &job{Email: "user@example.com", Prompt: prompt}
 
-	got := workSubmittedMessage(j)
+	got := picSubmittedMessage(j)
 	if !strings.Contains(got, "User: user@example.com") {
 		t.Fatalf("notification missing email: %q", got)
 	}
@@ -367,11 +294,11 @@ func TestSubmittedNotificationIncludesEmailAndFullPrompt(t *testing.T) {
 	}
 }
 
-func TestFinishedNotificationIncludesExitCodeAndFailureText(t *testing.T) {
-	j := &job{ID: "job123", Email: "user@example.com", Error: "codex exited with error: exit status 7"}
+func TestFinishedNotificationIncludesFailureText(t *testing.T) {
+	j := &job{ID: "job123", Email: "user@example.com", Error: "chatgpt daemon exited with error: exit status 7"}
 
-	got := workFinishedMessage(j, 7)
-	for _, want := range []string{"User: user@example.com", "Job: job123", "Exit code: 7", "FAILED:", j.Error} {
+	got := picFinishedMessage(j)
+	for _, want := range []string{"User: user@example.com", "Job: job123", "FAILED:", j.Error} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("notification missing %q: %q", want, got)
 		}
@@ -402,7 +329,7 @@ func TestWinNotifyURL(t *testing.T) {
 	}
 }
 
-func TestSafeUserPathRejectsTraversalAndRootDelete(t *testing.T) {
+func TestSafeUserPathRejectsTraversal(t *testing.T) {
 	root := t.TempDir()
 	if _, _, err := safeUserPath(root, `..\other`); err == nil {
 		t.Fatal("expected traversal error")
@@ -410,92 +337,24 @@ func TestSafeUserPathRejectsTraversalAndRootDelete(t *testing.T) {
 	if _, _, err := safeUserPath(root, filepath.Join(root, "file.txt")); err == nil {
 		t.Fatal("expected absolute path error")
 	}
-
-	s := &server{root: t.TempDir()}
-	req := httptest.NewRequest("DELETE", "/api/work/files?path=.", nil)
-	rr := httptest.NewRecorder()
-	s.deleteWorkFile(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d", rr.Code)
-	}
 }
 
-func TestWorkFileUploadAndList(t *testing.T) {
-	root := t.TempDir()
-	s := &server{root: root}
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	part, err := writer.CreateFormFile("files", "note.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := part.Write([]byte("hello")); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest("POST", "/api/work/files/upload?path=.", &body)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	rr := httptest.NewRecorder()
-	s.handleWorkFileUpload(rr, req)
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("upload status = %d body=%s", rr.Code, rr.Body.String())
-	}
-
-	listReq := httptest.NewRequest("GET", "/api/work/files?path=.", nil)
-	listRR := httptest.NewRecorder()
-	s.listWorkFiles(listRR, listReq)
-	if listRR.Code != http.StatusOK {
-		t.Fatalf("list status = %d", listRR.Code)
-	}
-	var uploadGot struct {
-		Files []fileEntry `json:"files"`
-	}
-	if err := json.Unmarshal(rr.Body.Bytes(), &uploadGot); err != nil {
-		t.Fatal(err)
-	}
-	if len(uploadGot.Files) != 1 || uploadGot.Files[0].Path != "note.txt" {
-		t.Fatalf("uploaded files = %#v", uploadGot.Files)
-	}
-
-	var got struct {
-		Entries []fileEntry `json:"entries"`
-	}
-	if err := json.Unmarshal(listRR.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Entries) != 1 || got.Entries[0].Name != "note.txt" {
-		t.Fatalf("entries = %#v", got.Entries)
-	}
-}
-
-func TestStaticHandlerServesWorkForCodexHostRoot(t *testing.T) {
+func TestStaticHandlerServesPicPageAtRoot(t *testing.T) {
 	root := os.DirFS("static")
 	handler := staticHandler(root, "test")
-	req := httptest.NewRequest("GET", "http://codex.io99.xyz/", nil)
-	rr := httptest.NewRecorder()
 
-	handler.ServeHTTP(rr, req)
+	for _, target := range []string{"http://pic.io99.xyz/", "http://127.0.0.1:8765/", "http://127.0.0.1:8765/pic/"} {
+		req := httptest.NewRequest("GET", target, nil)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d", rr.Code)
-	}
-	if !strings.Contains(rr.Body.String(), "Codex Work") {
-		t.Fatalf("expected work page, got %q", rr.Body.String())
-	}
-}
-
-func TestIsWorkHost(t *testing.T) {
-	if !isWorkHost("codex.io99.xyz") {
-		t.Fatal("expected codex.io99.xyz to be work host")
-	}
-	if !isWorkHost("codex.io99.xyz:443") {
-		t.Fatal("expected codex.io99.xyz:443 to be work host")
-	}
-	if isWorkHost("pic.io99.xyz") {
-		t.Fatal("pic host should not be work host")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s status = %d", target, rr.Code)
+		}
+		body := rr.Body.String()
+		if !strings.Contains(body, `src="/pic.js?v=test"`) {
+			t.Fatalf("%s expected pic page with versioned script, got %q", target, body)
+		}
 	}
 }
 
@@ -506,19 +365,4 @@ func mustReadFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return b
-}
-
-func writeTestFile(t *testing.T, path string, content []byte) {
-	t.Helper()
-	if err := os.WriteFile(path, content, 0644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func isolateImageSearchEnv(t *testing.T) {
-	t.Helper()
-	emptyHome := t.TempDir()
-	t.Setenv("CODEX_HOME", "")
-	t.Setenv("USERPROFILE", emptyHome)
-	t.Setenv("HOME", emptyHome)
 }
