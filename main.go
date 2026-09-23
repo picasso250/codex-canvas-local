@@ -254,10 +254,8 @@ func winNotifyURL(port string) (string, error) {
 func mustStaticVersion() string {
 	h := sha256.New()
 	for _, name := range []string{
-		"static/index.html",
 		"static/pic.html",
 		"static/audit.html",
-		"static/app.js",
 		"static/pic.js",
 		"static/audit.js",
 		"static/styles.css",
@@ -311,7 +309,7 @@ func staticHandler(root fs.FS, version string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 
-		if r.URL.Path == "/" || r.URL.Path == "/index.html" || r.URL.Path == "/pic" || r.URL.Path == "/pic/" {
+		if r.URL.Path == "/" || r.URL.Path == "/pic" || r.URL.Path == "/pic/" {
 			name := "pic.html"
 			b, err := fs.ReadFile(root, name)
 			if err != nil {
