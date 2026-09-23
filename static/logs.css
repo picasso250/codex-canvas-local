@@ -327,12 +327,6 @@ pre {
   line-height: 1.2;
 }
 
-.upgrade-intro {
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.62;
-}
-
 .upgrade-list {
   display: grid;
   gap: 10px;
