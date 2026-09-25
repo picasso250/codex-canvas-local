@@ -599,15 +599,18 @@ class ChatGPTAgent:
         for path in image_paths:
             if not os.path.isfile(path):
                 raise AgentError("image_not_found", f"Image not found: {path}")
-        file_input = page.locator("#upload-photos")
+        file_input = page.locator('input[type="file"][accept="image/*"]').first
         await file_input.set_input_files(image_paths)
 
     async def wait_for_image_upload(self, page: Page) -> None:
         await page.wait_for_function(
             """() => {
-                const imgs = document.querySelectorAll('[class*="file-tile"] img[src]');
+                const imgs = [...document.querySelectorAll('img')].filter(img => {
+                    const src = (img.currentSrc || img.src) || '';
+                    return src.startsWith('data:') || src.startsWith('blob:');
+                });
                 if (imgs.length === 0) return false;
-                return [...imgs].every(img => img.naturalWidth > 0 && !img.src.startsWith('blob:'));
+                return [...imgs].every(img => img.naturalWidth > 0);
             }""",
             timeout=60000,
         )
