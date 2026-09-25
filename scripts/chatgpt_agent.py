@@ -25,7 +25,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 53166
 SERVICE_ID = "imagegen-daemon"
 PROVIDER_ID = "imagegen"
-IMAGEGEN_TAB_RECOVERY_SECONDS = 60.0
+IMAGEGEN_TAB_RECOVERY_SECONDS = 90.0
 IMAGEGEN_RECOVERY_WAIT_SECONDS = 120.0
 CONVERSATION_URL_TIMEOUT_SECONDS = 30.0
 
@@ -536,7 +536,7 @@ class ChatGPTAgent:
     ) -> tuple[Page, str]:
         job = self.current_job
         if job:
-            self.report_progress(job, "generation_wait", "Waiting up to 60 seconds for generated images.")
+            self.report_progress(job, "generation_wait", "Waiting up to 90 seconds for generated images.")
         try:
             response = await wait_for_imagegen(
                 page,
@@ -552,7 +552,7 @@ class ChatGPTAgent:
                 raise
 
         if job:
-            self.report_progress(job, "recovery_started", "No ready image after 60 seconds; reopening the captured conversation URL.")
+            self.report_progress(job, "recovery_started", "No ready image after 90 seconds; reopening the captured conversation URL.")
 
         try:
             await page.close()
