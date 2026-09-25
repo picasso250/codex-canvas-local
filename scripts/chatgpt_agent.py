@@ -160,14 +160,14 @@ async def assistant_messages(page: Page) -> list[str]:
 
 async def turn_count(page: Page) -> int:
     return await page.evaluate(
-        """() => document.querySelectorAll('[data-testid^="conversation-turn-"]').length"""
+        """() => document.querySelectorAll('[data-testid="generated-image-preview"]').length"""
     )
 
 
 async def composer_ready(page: Page) -> bool:
     return await page.evaluate(
         """() => {
-          const box = document.querySelector('#prompt-textarea');
+          const box = document.querySelector('[contenteditable="true"][role="textbox"]');
           if (!box) return false;
           const rect = box.getBoundingClientRect();
           const style = getComputedStyle(box);
@@ -231,24 +231,19 @@ def imagegen_state_has_usable_images(state: dict[str, Any]) -> bool:
 
 
 async def imagegen_state(page: Page, before_turn_count: int) -> dict[str, Any]:
-    return await page.evaluate("""(beforeTurns) => {
-        const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')].slice(beforeTurns);
-        const assistantTurn = [...turns].reverse().find(turn => turn.getAttribute('data-turn') === 'assistant');
-        if (!assistantTurn) return {};
-
-        const containers = [...assistantTurn.querySelectorAll('[class*="imagegen-image"]')];
-        const imgs = containers.flatMap(container => [...container.querySelectorAll('img')]);
+    return await page.evaluate("""() => {
+        const imgs = [...document.querySelectorAll(
+            '[data-testid="generated-image-gallery"] img, [data-testid="generated-image-preview"] img'
+        )];
         const imageUrls = [...new Set(imgs.map(img => img.currentSrc || img.src).filter(Boolean))];
-        const hasPreview = [...assistantTurn.querySelectorAll('span')]
-            .some(element => (element.textContent || '').trim() === '预览');
 
         return {
-            has_images: containers.length > 0 && imgs.length > 0,
+            has_images: imgs.length > 0,
             images_loaded: imgs.length > 0 && imgs.every(img =>
                 img.complete && img.naturalWidth > 0 && img.naturalHeight > 0
             ),
             image_urls: imageUrls,
-            has_preview: hasPreview,
+            has_preview: false,
         };
     }""", before_turn_count)
 
@@ -486,7 +481,7 @@ class ChatGPTAgent:
 
             before_turns = await turn_count(page)
             before_assistant_count = len(await assistant_messages(page))
-            await click_element_center(page, "#prompt-textarea")
+            await click_element_center(page, '[contenteditable="true"][role="textbox"]')
             await type_like_user(page, job.prompt)
             self.report_progress(job, "prompt_typed", f"Typed {len(job.prompt)} prompt character(s).")
 
@@ -623,17 +618,13 @@ class ChatGPTAgent:
         os.makedirs(workdir, exist_ok=True)
 
         unique_urls = await page.evaluate("""() => {
-            const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')];
-            const assistantTurn = [...turns].reverse().find(turn => turn.getAttribute('data-turn') === 'assistant');
-            if (!assistantTurn) return [];
-            const containers = assistantTurn.querySelectorAll('[class*="imagegen-image"]');
+            const imgs = document.querySelectorAll(
+                '[data-testid="generated-image-gallery"] img, [data-testid="generated-image-preview"] img'
+            );
             const urls = new Set();
-            containers.forEach(c => {
-                const imgs = c.querySelectorAll('img');
-                imgs.forEach(img => {
-                    const url = img.currentSrc || img.src;
-                    if (url) urls.add(url);
-                });
+            imgs.forEach(img => {
+                const url = img.currentSrc || img.src;
+                if (url) urls.add(url);
             });
             return [...urls];
         }""")

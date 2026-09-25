@@ -206,7 +206,7 @@ func (s *server) createPicJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// go s.notifyPicSubmitted(j)
+	go s.notifyPicSubmitted(j)
 	go s.runPicJob(j, imagePaths)
 	writeJSON(w, http.StatusAccepted, createJobResponse{ID: id})
 }
@@ -389,7 +389,7 @@ func (s *server) runPicJob(j *job, imagePaths []string) {
 		if err := s.writeAuditEvent(newAuditPicFinishedEvent(j)); err != nil {
 			s.appendLog(j, "Audit finish write failed: %v\n", err)
 		}
-		// s.notifyPicFinished(j)
+		s.notifyPicFinished(j)
 	}()
 
 	s.appendLog(j, "Starting image generation via ChatGPT daemon...\n")
